@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+jobs_raw.json
+usajobs_credentials.json
