@@ -1,4 +1,9 @@
 __pycache__/
 *.pyc
+.DS_Store
 jobs_raw.json
+jobs_ranked.json
+jobs_scraped*.json
+indeed_jobs*.csv
+indeed-job-scrape.skill
 usajobs_credentials.json

@@ -30,6 +30,29 @@ Combine city and keyword:
 python3 usajobs_summer_scraper.py --city "San Jose, California" --keyword "student"
 ```
 
+## One-Command Pipeline
+
+After an Indeed CSV exists for the location, run the full local pipeline with:
+
+```bash
+python3 run_job_pipeline.py --location "Cupertino, CA"
+```
+
+This refreshes USAJOBS, uses the matching Indeed CSV, and regenerates
+`jobs_ranked.json`.
+
+If you already have a Claude/Indeed scraped JSON file, the pipeline can convert
+it first:
+
+```bash
+python3 run_job_pipeline.py \
+  --location "Cupertino, CA" \
+  --scraped-json jobs_scraped.json
+```
+
+Indeed scraping itself still has to be done through the browser-driven
+Claude/Indeed skill because Indeed blocks normal command-line scraping.
+
 ## Credentials
 
 The script looks for credentials in this order:
