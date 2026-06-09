@@ -1,9 +1,11 @@
 """
-Rate and sort jobs from USAJOBS and Indeed for high-school summer job fit.
+Rate and sort jobs from USAJOBS, Indeed, and CareerOneStop for high-school
+summer job fit.
 
 Inputs:
 - jobs_raw.json
 - indeed_jobs_cupertino.csv
+- jobs_careeronestop_<location>.json
 
 Output:
 - jobs_ranked.json
@@ -26,6 +28,7 @@ from typing import Any, Optional
 DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_USAJOBS_FILE = str(DATA_DIR / "jobs_raw.json")
 DEFAULT_INDEED_FILE = str(DATA_DIR / "indeed_jobs_cupertino.csv")
+DEFAULT_CAREERONESTOP_FILE = ""
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
 NOT_SPECIFIED = "Not specified"
@@ -168,6 +171,20 @@ def load_indeed_jobs(filename: str) -> list[dict[str, Any]]:
         return [normalize_indeed_job(row) for row in csv.DictReader(file)]
 
 
+def load_careeronestop_jobs(filename: str) -> list[dict[str, Any]]:
+    """Load and normalize CareerOneStop JSON records when provided."""
+    if not filename:
+        return []
+
+    with open(filename, "r", encoding="utf-8") as file:
+        rows = json.load(file)
+
+    if not isinstance(rows, list):
+        raise SystemExit(f"{filename} must contain a list of CareerOneStop jobs.")
+
+    return [normalize_careeronestop_job(row) for row in rows if isinstance(row, dict)]
+
+
 def normalize_usajobs_job(row: dict[str, Any]) -> dict[str, Any]:
     """Convert one USAJOBS row to the common job shape."""
     pay = format_usajobs_pay(row)
@@ -217,6 +234,34 @@ def normalize_indeed_job(row: dict[str, Any]) -> dict[str, Any]:
         "teen_fit_reason": clean_value(row.get("teen_fit_reason")),
         "description": clean_value(row.get("description_snippet")),
         "url": clean_value(row.get("job_url")),
+    }
+
+
+def normalize_careeronestop_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert one CareerOneStop row to the common job shape."""
+    return {
+        "source": "careeronestop",
+        "source_id": clean_value(row.get("job_id")),
+        "title": clean_value(row.get("title")),
+        "company": clean_value(row.get("company")),
+        "department": NOT_SPECIFIED,
+        "location": clean_value(row.get("location")),
+        "city": extract_city(row.get("location")),
+        "state": extract_state(row.get("location")),
+        "latitude": None,
+        "longitude": None,
+        "pay": NOT_SPECIFIED,
+        "hourly_pay_estimate": None,
+        "job_type": NOT_SPECIFIED,
+        "schedule": NOT_SPECIFIED,
+        "date_posted": clean_value(row.get("date_posted")),
+        "deadline": NOT_SPECIFIED,
+        "teen_fit_reason": NOT_SPECIFIED,
+        "description": clean_value(row.get("description_snippet")),
+        "url": clean_value(row.get("job_url")),
+        "distance_miles": parse_float(row.get("distance")),
+        "onet_codes": row.get("onet_codes") if isinstance(row.get("onet_codes"), list) else [],
+        "search_keyword": clean_value(row.get("search_keyword")),
     }
 
 
@@ -542,6 +587,9 @@ def score_source_fit(job: dict[str, Any]) -> tuple[int, list[str]]:
         if not any(word in text for word in ("student", "summer", "seasonal", "intern")):
             return -12, ["-12 USAJOBS listing lacks student/summer wording"]
 
+    if job.get("source") == "careeronestop":
+        return 2, ["+2 CareerOneStop listing has structured local API data"]
+
     return 0, []
 
 
@@ -565,9 +613,15 @@ def dedupe_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped = []
 
     for job in jobs:
-        unique_key = clean_value(job.get("source_id"))
-        if unique_key == NOT_SPECIFIED:
-            unique_key = clean_value(job.get("url"))
+        source = clean_value(job.get("source")).lower()
+        url = clean_value(job.get("url"))
+        source_id = clean_value(job.get("source_id"))
+        if url != NOT_SPECIFIED:
+            unique_key = f"url:{url.lower()}"
+        elif source_id != NOT_SPECIFIED:
+            unique_key = f"{source}:{source_id.lower()}"
+        else:
+            unique_key = NOT_SPECIFIED
 
         fallback_key = "|".join(
             clean_value(job.get(field)).lower()
@@ -608,7 +662,11 @@ def rank_jobs(
     home_coordinates = coordinates_for_location(home_location)
     ranked_jobs = []
     for job in jobs:
-        job["distance_miles"] = estimate_distance_miles(job, home_coordinates)
+        source_distance = parse_float(job.get("distance_miles"))
+        if source_distance is not None:
+            job["distance_miles"] = source_distance
+        else:
+            job["distance_miles"] = estimate_distance_miles(job, home_coordinates)
         rating = rate_job(job)
         ranked_jobs.append({**job, "home_location": home_location, **rating})
 
@@ -715,12 +773,16 @@ def format_row(values: list[str], widths: list[int]) -> str:
 
 
 def main() -> None:
-    """Load, rate, sort, save, and preview jobs from both sources."""
+    """Load, rate, sort, save, and preview jobs from all configured sources."""
     parser = argparse.ArgumentParser(
-        description="Rank USAJOBS and Indeed listings by high-school summer job fit."
+        description=(
+            "Rank USAJOBS, Indeed, and CareerOneStop listings by high-school "
+            "summer job fit."
+        )
     )
     parser.add_argument("--usajobs-file", default=DEFAULT_USAJOBS_FILE)
     parser.add_argument("--indeed-file", default=DEFAULT_INDEED_FILE)
+    parser.add_argument("--careeronestop-file", default=DEFAULT_CAREERONESTOP_FILE)
     parser.add_argument("--output", default=DEFAULT_OUTPUT_FILE)
     parser.add_argument(
         "--home-location",
@@ -734,7 +796,11 @@ def main() -> None:
     args = parser.parse_args()
 
     home_location = resolve_home_location(args.home_location)
-    jobs = load_usajobs(args.usajobs_file) + load_indeed_jobs(args.indeed_file)
+    jobs = (
+        load_usajobs(args.usajobs_file)
+        + load_indeed_jobs(args.indeed_file)
+        + load_careeronestop_jobs(args.careeronestop_file)
+    )
     jobs = dedupe_jobs(jobs)
     ranked_jobs = rank_jobs(jobs, home_location)
     save_ranked_jobs(ranked_jobs, args.output)

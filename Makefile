@@ -3,6 +3,8 @@ RADIUS   ?= 10
 PAGES    ?= 3
 RESULTS  ?= 25
 MIN_SCORE ?= 50
+CAREER_RESULTS ?= 25
+CAREER_DAYS ?= 30
 PORT     ?= 8000
 PYTHON   := python3
 
@@ -42,6 +44,28 @@ run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
 		--skip-usajobs \
+		--clean-min-score $(MIN_SCORE)
+
+.PHONY: run-skip-careeronestop
+run-skip-careeronestop: ## Run without CareerOneStop API results
+	$(PYTHON) pipeline/run_job_pipeline.py \
+		--location "$(LOCATION)" \
+		--indeed-radius $(RADIUS) \
+		--indeed-pages $(PAGES) \
+		--num-usajobs-results $(RESULTS) \
+		--skip-careeronestop \
+		--clean-min-score $(MIN_SCORE)
+
+.PHONY: run-with-careeronestop
+run-with-careeronestop: ## Include CareerOneStop API results once NLx access is approved
+	$(PYTHON) pipeline/run_job_pipeline.py \
+		--location "$(LOCATION)" \
+		--indeed-radius $(RADIUS) \
+		--indeed-pages $(PAGES) \
+		--num-usajobs-results $(RESULTS) \
+		--include-careeronestop \
+		--careeronestop-results $(CAREER_RESULTS) \
+		--careeronestop-days $(CAREER_DAYS) \
 		--clean-min-score $(MIN_SCORE)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

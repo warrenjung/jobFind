@@ -5,10 +5,12 @@ This script coordinates the pieces in this project:
 1. Refresh USAJOBS results for a location.
 2. Scrape Indeed with a headless Playwright browser (scrape_indeed.py).
 3. Build an Indeed CSV from the scraped JSON (build_csv.py).
-4. Rank the combined USAJOBS + Indeed results into jobs_ranked.json.
-5. Export a clean HTML page for easy reading.
+4. Optionally refresh CareerOneStop results for a location.
+5. Rank the combined USAJOBS + Indeed + CareerOneStop results into jobs_ranked.json.
+6. Export a clean HTML page for easy reading.
 
 Pass --skip-indeed to skip steps 2-3 and use an existing Indeed CSV.
+Pass --include-careeronestop to include CareerOneStop once Jobs API access works.
 """
 
 import argparse
@@ -29,8 +31,11 @@ DEFAULT_RANKED_FILE = DATA_DIR / "jobs_ranked.json"
 DEFAULT_CLEAN_FILE = DATA_DIR / "jobs_clean.html"
 DEFAULT_CLEAN_MIN_SCORE = 50
 DEFAULT_RESULTS = 25
+DEFAULT_CAREERONESTOP_RESULTS = 25
+DEFAULT_CAREERONESTOP_DAYS = 30
 INDEED_HELPER = _HERE / "build_csv.py"
 INDEED_SCRAPER = _HERE / "scrape_indeed.py"
+CAREERONESTOP_SCRAPER = _HERE / "careeronestop_scraper.py"
 CLEAN_TABLE_EXPORTER = _HERE / "export_clean_table.py"
 
 
@@ -49,7 +54,12 @@ def run_command(command: list) -> None:
     """Run a child command and stop the pipeline if it fails."""
     command = [str(part) for part in command]
     print(f"\n$ {' '.join(command)}", flush=True)
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            f"\nCommand failed with exit code {exc.returncode}: {' '.join(command)}"
+        ) from exc
 
 
 def find_scraped_json(
@@ -151,6 +161,43 @@ def find_existing_indeed_csv(
     )
 
 
+def fetch_careeronestop_jobs(
+    location: str,
+    location_slug: str,
+    careeronestop_file: Optional[str],
+    radius: int,
+    results: int,
+    days: int,
+) -> Path:
+    """Run the CareerOneStop API fetcher and return the output JSON path."""
+    if not CAREERONESTOP_SCRAPER.exists():
+        raise SystemExit(
+            f"Could not find CareerOneStop scraper at {CAREERONESTOP_SCRAPER}."
+        )
+    output_json = (
+        Path(careeronestop_file)
+        if careeronestop_file
+        else DATA_DIR / f"jobs_careeronestop_{location_slug}.json"
+    )
+    run_command(
+        [
+            sys.executable,
+            str(CAREERONESTOP_SCRAPER),
+            "--location",
+            location,
+            "--radius",
+            str(radius),
+            "--results",
+            str(results),
+            "--days",
+            str(days),
+            "--output",
+            str(output_json),
+        ]
+    )
+    return output_json
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Refresh USAJOBS, prepare Indeed data, and rank jobs."
@@ -179,6 +226,11 @@ def main() -> None:
         "--ranked-output",
         default=DEFAULT_RANKED_FILE,
         help=f"Ranked output JSON file. Default: {DEFAULT_RANKED_FILE}.",
+    )
+    parser.add_argument(
+        "--careeronestop-file",
+        default=None,
+        help="CareerOneStop JSON file. Default: jobs_careeronestop_<location>.json.",
     )
     parser.add_argument(
         "--clean-output",
@@ -222,6 +274,16 @@ def main() -> None:
         help="Skip Indeed scraping and use an existing Indeed CSV.",
     )
     parser.add_argument(
+        "--skip-careeronestop",
+        action="store_true",
+        help="Skip CareerOneStop API fetching and ranking.",
+    )
+    parser.add_argument(
+        "--include-careeronestop",
+        action="store_true",
+        help="Include CareerOneStop API results. Off by default until Jobs API access is approved.",
+    )
+    parser.add_argument(
         "--indeed-radius",
         type=int,
         default=10,
@@ -233,6 +295,30 @@ def main() -> None:
         type=int,
         default=3,
         help="Pages per Indeed search query (10 results each). Default: 3.",
+    )
+    parser.add_argument(
+        "--careeronestop-radius",
+        type=int,
+        default=None,
+        help="Search radius in miles for CareerOneStop. Default: Indeed radius.",
+    )
+    parser.add_argument(
+        "--careeronestop-results",
+        type=int,
+        default=DEFAULT_CAREERONESTOP_RESULTS,
+        help=(
+            "CareerOneStop results per keyword. "
+            f"Default: {DEFAULT_CAREERONESTOP_RESULTS}."
+        ),
+    )
+    parser.add_argument(
+        "--careeronestop-days",
+        type=int,
+        default=DEFAULT_CAREERONESTOP_DAYS,
+        help=(
+            "Only include CareerOneStop jobs from the last N days. "
+            f"Default: {DEFAULT_CAREERONESTOP_DAYS}. Use 0 for all jobs."
+        ),
     )
     parser.add_argument(
         "--preview-count",
@@ -274,21 +360,45 @@ def main() -> None:
             str(scraped_json),
         )
 
-    run_command(
-        [
-            sys.executable,
-            str(_HERE / "rank_jobs.py"),
-            "--home-location",
+    careeronestop_json = None
+    if args.include_careeronestop and not args.skip_careeronestop:
+        careeronestop_radius = (
+            args.careeronestop_radius
+            if args.careeronestop_radius is not None
+            else args.indeed_radius
+        )
+        careeronestop_json = fetch_careeronestop_jobs(
             args.location,
-            "--usajobs-file",
-            args.usajobs_file,
-            "--indeed-file",
-            str(indeed_csv),
-            "--output",
-            args.ranked_output,
-            "--preview-count",
-            str(args.preview_count),
-        ]
+            location_slug,
+            args.careeronestop_file,
+            careeronestop_radius,
+            args.careeronestop_results,
+            args.careeronestop_days,
+        )
+    elif args.skip_careeronestop:
+        print("\nSkipping CareerOneStop (--skip-careeronestop).")
+    else:
+        print("\nSkipping CareerOneStop by default. Use --include-careeronestop after NLx Jobs API access is approved.")
+
+    rank_command = [
+        sys.executable,
+        str(_HERE / "rank_jobs.py"),
+        "--home-location",
+        args.location,
+        "--usajobs-file",
+        args.usajobs_file,
+        "--indeed-file",
+        str(indeed_csv),
+        "--output",
+        args.ranked_output,
+        "--preview-count",
+        str(args.preview_count),
+    ]
+    if careeronestop_json is not None:
+        rank_command.extend(["--careeronestop-file", str(careeronestop_json)])
+
+    run_command(
+        rank_command
     )
 
     if not args.skip_clean_table:

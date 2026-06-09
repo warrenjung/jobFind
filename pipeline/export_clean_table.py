@@ -79,6 +79,8 @@ def format_source(job: dict[str, Any]) -> str:
         return "Indeed"
     if source == "usajobs":
         return "USAJOBS"
+    if source == "careeronestop":
+        return "CareerOneStop"
     return NOT_SPECIFIED
 
 

@@ -1,28 +1,27 @@
 # Job Finder
 
-Find entry-level, teen-friendly summer jobs near any city. Pulls from two
-sources — the **USAJOBS API** (federal/government temp roles) and **Indeed**
-(local retail, food service, etc.) — ranks everything by fit for an ~18-year-old
-with no degree, license, or certification, and outputs a single scored list.
+Find entry-level, teen-friendly summer jobs near any city. Pulls from
+**USAJOBS** and **Indeed** by default, with optional **CareerOneStop** support
+ready for when NLx jobs-data access is approved. It ranks everything by fit for
+an ~18-year-old with no degree, license, or certification.
 
 ## How it works
 
 ```
-USAJOBS API ─────────────────────────────────┐
-                                             ▼
-Indeed (Playwright headless browser) ──► rank_jobs.py ──► jobs_ranked.json
-  └─ scrape_indeed.py
+USAJOBS API ────────────────────────────────┐
+Indeed (Playwright headless browser) ───────┼─► rank_jobs.py ──► jobs_ranked.json
+CareerOneStop Jobs V2 API (optional) ───────┘                      ▼
+  └─ scrape_indeed.py                                      jobs_clean.html
   └─ pipeline/build_csv.py (filter)
-                                             ▼
-                                      jobs_clean.html
 ```
 
 1. `usajobs_summer_scraper.py` — fetches temporary/seasonal roles from USAJOBS
-2. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser (Playwright)
-3. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
-4. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
-5. `export_clean_table.py` — exports easy-to-read HTML job cards
-6. `run_job_pipeline.py` — orchestrates all of the above in one command
+2. `careeronestop_scraper.py` — fetches optional local listings from CareerOneStop Jobs V2
+3. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser
+4. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
+5. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
+6. `export_clean_table.py` — exports easy-to-read HTML job cards
+7. `run_job_pipeline.py` — orchestrates all of the above in one command
 
 ## Setup
 
@@ -56,6 +55,27 @@ export USAJOBS_API_KEY=YOUR_KEY
 export USAJOBS_USER_AGENT=your@email.com
 ```
 
+### CareerOneStop credentials
+
+CareerOneStop code is included, but the pipeline skips it by default because
+Jobs V2 requires separate NLx jobs-data approval. Once access is approved,
+provide credentials in **one** of these ways and use `make run-with-careeronestop`:
+
+**Option A — credentials file** (recommended, already gitignored):
+```json
+// careeronestop_credentials.json
+{
+  "user_id": "YOUR_USER_ID",
+  "api_token": "YOUR_API_TOKEN"
+}
+```
+
+**Option B — environment variables:**
+```bash
+export CAREERONESTOP_USER_ID=YOUR_USER_ID
+export CAREERONESTOP_API_TOKEN=YOUR_API_TOKEN
+```
+
 ## Usage
 
 ```bash
@@ -70,6 +90,9 @@ make run-skip-indeed LOCATION="Cupertino, CA"
 
 # Re-scrape Indeed only — skip USAJOBS fetch
 make run-skip-usajobs LOCATION="Cupertino, CA"
+
+# Include CareerOneStop after NLx Jobs API access is approved
+make run-with-careeronestop LOCATION="Cupertino, CA"
 
 # Rebuild the readable HTML cards from existing ranked jobs
 make table
@@ -89,6 +112,8 @@ make run              Run the full pipeline
 make run-wide         Same as run but with a 25-mile radius
 make run-skip-indeed  Re-rank using the existing Indeed CSV
 make run-skip-usajobs Re-scrape Indeed, skip USAJOBS
+make run-with-careeronestop Include CareerOneStop API results once NLx access is approved
+make run-skip-careeronestop Run without CareerOneStop API results
 make table            Regenerate the readable HTML cards
 make serve            Serve the HTML results over HTTP (port 8000)
 make clean            Remove all generated output files
@@ -98,6 +123,11 @@ make help             Show this message
 Override any default:
 ```bash
 make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50 MIN_SCORE=60
+```
+
+CareerOneStop-specific options are used by `make run-with-careeronestop`:
+```bash
+make run-with-careeronestop LOCATION="Seattle, WA" CAREER_RESULTS=50 CAREER_DAYS=60
 ```
 
 The readable HTML output hides obvious poor fits by default, only showing jobs
@@ -111,8 +141,9 @@ All generated files are written to `data/` (created automatically, gitignored):
 |------|-------------|
 | `data/jobs_clean.html` | Clean readable job cards rated 50+ with job, employer, description, pay, distance, score, and apply link |
 | `data/jobs_clean.md` | Optional raw Markdown table export |
-| `data/jobs_ranked.json` | Detailed ranked list from both sources |
+| `data/jobs_ranked.json` | Detailed ranked list from all sources |
 | `data/jobs_raw.json` | Raw USAJOBS results |
+| `data/jobs_careeronestop_<city>.json` | Optional raw CareerOneStop API results |
 | `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |
 | `data/indeed_jobs_<city>.csv` | Filtered teen-friendly Indeed jobs |
 | `data/indeed_jobs_<city>_excluded.csv` | Filtered-out jobs and reasons |
@@ -151,10 +182,12 @@ jobFind/
 │   ├── scrape_indeed.py            # Headless Indeed scraper (Playwright)
 │   ├── rank_jobs.py                # Scoring + ranking engine
 │   ├── export_clean_table.py       # Human-readable HTML/Markdown exporter
+│   ├── careeronestop_scraper.py    # CareerOneStop Jobs V2 API client
 │   ├── usajobs_summer_scraper.py   # USAJOBS API client
 │   └── build_csv.py               # Filter scraped JSON → clean CSV
 ├── data/                           # Generated outputs (gitignored, auto-created)
 ├── usajobs_credentials.json        # Your USAJOBS API key (gitignored)
+├── careeronestop_credentials.json  # Your CareerOneStop API token (gitignored)
 ├── Makefile                        # install / run / clean targets
 ├── requirements.txt                # Python dependencies
 └── README.md
@@ -171,6 +204,11 @@ Indeed is showing a bot challenge. Debug standalone:
 
 **USAJOBS SSL warning** (`NotOpenSSLWarning`) — harmless on macOS with system
 Python; results still fetch correctly.
+
+**CareerOneStop returns 401 Unauthorized** — the token can be valid for general
+CareerOneStop APIs while Jobs V2 remains unavailable until NLx jobs-data access
+is approved. Use the normal `make run` while waiting, then switch to
+`make run-with-careeronestop`.
 
 **`TypeError: unsupported operand type(s) for |`** — Python 3.9 compatibility
 issue. Scripts are patched; if it reappears in `build_csv.py`, replace any
