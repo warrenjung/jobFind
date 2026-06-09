@@ -19,11 +19,13 @@ from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_LOCATION = "Cupertino, CA"
-DEFAULT_USAJOBS_FILE = "jobs_raw.json"
-DEFAULT_RANKED_FILE = "jobs_ranked.json"
-DEFAULT_RESULTS = 25
 _HERE = Path(__file__).parent
+DATA_DIR = _HERE.parent / "data"
+
+DEFAULT_LOCATION = "Cupertino, CA"
+DEFAULT_USAJOBS_FILE = DATA_DIR / "jobs_raw.json"
+DEFAULT_RANKED_FILE = DATA_DIR / "jobs_ranked.json"
+DEFAULT_RESULTS = 25
 INDEED_HELPER = _HERE / "build_csv.py"
 INDEED_SCRAPER = _HERE / "scrape_indeed.py"
 
@@ -39,8 +41,9 @@ def city_slug_from_location(location: str) -> str:
     return slugify_location(location.split(",", 1)[0])
 
 
-def run_command(command: list[str]) -> None:
+def run_command(command: list) -> None:
     """Run a child command and stop the pipeline if it fails."""
+    command = [str(part) for part in command]
     print(f"\n$ {' '.join(command)}", flush=True)
     subprocess.run(command, check=True)
 
@@ -55,8 +58,8 @@ def find_scraped_json(
         candidates.append(Path(explicit_path))
     candidates.extend(
         [
-            Path(f"jobs_scraped_{location_slug}.json"),
-            Path("jobs_scraped.json"),
+            DATA_DIR / f"jobs_scraped_{location_slug}.json",
+            DATA_DIR / "jobs_scraped.json",
         ]
     )
 
@@ -75,7 +78,7 @@ def scrape_indeed(
     """Run the Playwright-based Indeed scraper and return the output JSON path."""
     if not INDEED_SCRAPER.exists():
         raise SystemExit(f"Could not find Indeed scraper at {INDEED_SCRAPER}.")
-    output_json = Path(f"jobs_scraped_{location_slug}.json")
+    output_json = DATA_DIR / f"jobs_scraped_{location_slug}.json"
     run_command(
         [
             sys.executable,
@@ -100,7 +103,7 @@ def ensure_indeed_csv(
     scraped_json: Optional[str],
 ) -> Path:
     """Return an Indeed CSV, building it from scraped JSON."""
-    output_csv = Path(indeed_file or f"indeed_jobs_{city_slug}.csv")
+    output_csv = Path(indeed_file) if indeed_file else DATA_DIR / f"indeed_jobs_{city_slug}.csv"
     scraped_path = find_scraped_json(location_slug, scraped_json)
 
     if not scraped_path:
@@ -130,11 +133,11 @@ def find_existing_indeed_csv(
     indeed_file: Optional[str],
 ) -> Path:
     """Return a pre-existing Indeed CSV when --skip-indeed is used."""
-    output_csv = Path(indeed_file or f"indeed_jobs_{city_slug}.csv")
+    output_csv = Path(indeed_file) if indeed_file else DATA_DIR / f"indeed_jobs_{city_slug}.csv"
     if output_csv.exists():
         print(f"\nUsing existing Indeed CSV: {output_csv}")
         return output_csv
-    alternate_csv = Path(f"indeed_jobs_{location_slug}.csv")
+    alternate_csv = DATA_DIR / f"indeed_jobs_{location_slug}.csv"
     if not indeed_file and alternate_csv.exists():
         print(f"\nUsing existing Indeed CSV: {alternate_csv}")
         return alternate_csv
@@ -209,6 +212,8 @@ def main() -> None:
         help="Number of ranked jobs to preview in the terminal. Default: 10.",
     )
     args = parser.parse_args()
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     location_slug = slugify_location(args.location)
     city_slug = city_slug_from_location(args.location)

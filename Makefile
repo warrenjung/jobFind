@@ -42,9 +42,8 @@ run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 .PHONY: clean
-clean: ## Remove all generated output files
-	rm -f jobs_raw.json jobs_ranked.json jobs_scraped*.json
-	rm -f indeed_jobs*.csv indeed_jobs*_excluded.csv
+clean: ## Remove all generated output files (data/)
+	rm -rf data/
 
 .PHONY: help
 help: ## Show this help

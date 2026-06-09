@@ -19,12 +19,14 @@ import math
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 
-DEFAULT_USAJOBS_FILE = "jobs_raw.json"
-DEFAULT_INDEED_FILE = "indeed_jobs_cupertino.csv"
-DEFAULT_OUTPUT_FILE = "jobs_ranked.json"
+DATA_DIR = Path(__file__).parent.parent / "data"
+DEFAULT_USAJOBS_FILE = str(DATA_DIR / "jobs_raw.json")
+DEFAULT_INDEED_FILE = str(DATA_DIR / "indeed_jobs_cupertino.csv")
+DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
 NOT_SPECIFIED = "Not specified"
 
@@ -648,6 +650,7 @@ def distance_sort_value(distance: Any) -> float:
 
 def save_ranked_jobs(jobs: list[dict[str, Any]], filename: str) -> None:
     """Save ranked jobs as JSON."""
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
     with open(filename, "w", encoding="utf-8") as file:
         json.dump(jobs, file, indent=2, ensure_ascii=False)
 

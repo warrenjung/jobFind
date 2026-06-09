@@ -9,17 +9,21 @@ cleaned records to JSON, and prints a small console preview.
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import requests
 
 
+_REPO_ROOT = Path(__file__).parent.parent
+DATA_DIR = _REPO_ROOT / "data"
+
 BASE_URL = "https://data.usajobs.gov/api/Search"
 DEFAULT_KEYWORD = ""
 DEFAULT_CITY = "San Francisco, California"
 DEFAULT_NUM_RESULTS = 25
-DEFAULT_OUTPUT_FILE = "jobs_raw.json"
-DEFAULT_CREDENTIALS_FILE = "usajobs_credentials.json"
+DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_raw.json")
+DEFAULT_CREDENTIALS_FILE = str(_REPO_ROOT / "usajobs_credentials.json")
 TEMPORARY_APPOINTMENT_CODE = "15317"
 NOT_SPECIFIED = "Not specified"
 
@@ -150,6 +154,9 @@ def parse_jobs(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 def save_jobs(jobs: list[dict[str, Any]], filename: str) -> None:
     """Save extracted job records to a JSON file."""
+    parent = os.path.dirname(filename)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(filename, "w", encoding="utf-8") as file:
         json.dump(jobs, file, indent=2, ensure_ascii=False)
 

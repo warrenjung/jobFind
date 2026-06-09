@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
 
+DATA_DIR = Path(__file__).parent.parent / "data"
+
 # Teen-friendly search queries — broad coverage, no degree/license needed
 SEARCH_QUERIES = [
     "cashier",
@@ -328,7 +330,7 @@ def main() -> None:
     parser.add_argument("--location", default="Cupertino, CA", help="City, State")
     parser.add_argument("--radius", type=int, default=10, choices=[0, 5, 10, 15, 25, 35, 50])
     parser.add_argument("--pages", type=int, default=3, help="Pages per search query (10 results each)")
-    parser.add_argument("--output", default="jobs_scraped.json", help="Output JSON file")
+    parser.add_argument("--output", default=str(DATA_DIR / "jobs_scraped.json"), help="Output JSON file")
     parser.add_argument(
         "--queries",
         nargs="+",
@@ -343,6 +345,7 @@ def main() -> None:
     jobs = scrape_with_playwright(args.location, args.radius, args.pages, queries)
 
     out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(jobs, indent=2))
     print(f"\nSaved {len(jobs)} jobs to {out}")
 

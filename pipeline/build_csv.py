@@ -17,6 +17,7 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from typing import Any, Optional
@@ -197,6 +198,9 @@ def to_row(job: dict[str, Any]) -> dict[str, str]:
 
 
 def write_csv(rows: list[dict[str, str]], path: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS)
         writer.writeheader()

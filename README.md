@@ -91,15 +91,17 @@ make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50
 
 ## Output files
 
+All generated files are written to `data/` (created automatically, gitignored):
+
 | File | Description |
 |------|-------------|
-| `jobs_raw.json` | Raw USAJOBS results |
-| `jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |
-| `indeed_jobs_<city>.csv` | Filtered teen-friendly Indeed jobs |
-| `indeed_jobs_<city>_excluded.csv` | Filtered-out jobs and reasons |
-| `jobs_ranked.json` | Final ranked list from both sources |
+| `data/jobs_raw.json` | Raw USAJOBS results |
+| `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |
+| `data/indeed_jobs_<city>.csv` | Filtered teen-friendly Indeed jobs |
+| `data/indeed_jobs_<city>_excluded.csv` | Filtered-out jobs and reasons |
+| `data/jobs_ranked.json` | Final ranked list from both sources |
 
-All output files are gitignored.
+Run `make clean` to remove the whole `data/` directory.
 
 ## Claude Code skill
 
@@ -130,6 +132,8 @@ jobFind/
 │   ├── rank_jobs.py                # Scoring + ranking engine
 │   ├── usajobs_summer_scraper.py   # USAJOBS API client
 │   └── build_csv.py               # Filter scraped JSON → clean CSV
+├── data/                           # Generated outputs (gitignored, auto-created)
+├── usajobs_credentials.json        # Your USAJOBS API key (gitignored)
 ├── Makefile                        # install / run / clean targets
 ├── requirements.txt                # Python dependencies
 └── README.md
@@ -142,7 +146,7 @@ instead, or just run `make install`.
 
 **Indeed returns 0 jobs** — try a wider radius (`make run-wide`) or check if
 Indeed is showing a bot challenge. Debug standalone:
-`python3 scrape_indeed.py --location "City, ST" --pages 1 --queries cashier`
+`python3 pipeline/scrape_indeed.py --location "City, ST" --pages 1 --queries cashier`
 
 **USAJOBS SSL warning** (`NotOpenSSLWarning`) — harmless on macOS with system
 Python; results still fetch correctly.
