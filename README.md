@@ -118,20 +118,21 @@ Claude will invoke `run_job_pipeline.py` automatically.
 jobFind/
 ├── .claude/
 │   └── skills/
-│       └── job-pipeline/
-│           └── SKILL.md            # Claude Code skill (auto-loaded)
-├── indeed-job-scrape/
-│   ├── SKILL.md                    # Legacy Claude browser skill
-│   ├── references/
-│   │   └── indeed-reference.md    # Indeed URL params + JSON schema docs
-│   └── scripts/
-│       └── build_csv.py           # Filter scraped JSON → clean CSV
+│       ├── job-pipeline/           # Full pipeline skill (auto-loaded by Claude Code)
+│       │   └── SKILL.md
+│       └── indeed-job-scrape/      # Legacy browser skill + reference docs
+│           ├── SKILL.md
+│           └── references/
+│               └── indeed-reference.md
+├── pipeline/                       # All Python pipeline scripts
+│   ├── run_job_pipeline.py         # Main orchestrator
+│   ├── scrape_indeed.py            # Headless Indeed scraper (Playwright)
+│   ├── rank_jobs.py                # Scoring + ranking engine
+│   ├── usajobs_summer_scraper.py   # USAJOBS API client
+│   └── build_csv.py               # Filter scraped JSON → clean CSV
 ├── Makefile                        # install / run / clean targets
 ├── requirements.txt                # Python dependencies
-├── run_job_pipeline.py             # Main orchestrator
-├── scrape_indeed.py                # Headless Indeed scraper (Playwright)
-├── rank_jobs.py                    # Scoring + ranking engine
-└── usajobs_summer_scraper.py       # USAJOBS API client
+└── README.md
 ```
 
 ## Troubleshooting

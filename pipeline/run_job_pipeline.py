@@ -23,8 +23,9 @@ DEFAULT_LOCATION = "Cupertino, CA"
 DEFAULT_USAJOBS_FILE = "jobs_raw.json"
 DEFAULT_RANKED_FILE = "jobs_ranked.json"
 DEFAULT_RESULTS = 25
-INDEED_HELPER = Path("indeed-job-scrape/scripts/build_csv.py")
-INDEED_SCRAPER = Path("scrape_indeed.py")
+_HERE = Path(__file__).parent
+INDEED_HELPER = _HERE / "build_csv.py"
+INDEED_SCRAPER = _HERE / "scrape_indeed.py"
 
 
 def slugify_location(location: str) -> str:
@@ -216,7 +217,7 @@ def main() -> None:
         run_command(
             [
                 sys.executable,
-                "usajobs_summer_scraper.py",
+                str(_HERE / "usajobs_summer_scraper.py"),
                 "--city",
                 args.location,
                 "--num-results",
@@ -242,7 +243,7 @@ def main() -> None:
     run_command(
         [
             sys.executable,
-            "rank_jobs.py",
+            str(_HERE / "rank_jobs.py"),
             "--home-location",
             args.location,
             "--usajobs-file",

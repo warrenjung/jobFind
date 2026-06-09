@@ -45,11 +45,11 @@ The pipeline scripts live in the `jobFind` project directory. Confirm the path
 from that directory.
 
 Check that the required scripts exist:
-- `run_job_pipeline.py`
+- `pipeline/run_job_pipeline.py`
 - `scrape_indeed.py`
 - `rank_jobs.py`
 - `usajobs_summer_scraper.py`
-- `indeed-job-scrape/scripts/build_csv.py`
+- `pipeline/build_csv.py`
 
 ### 2. Check USAJOBS credentials
 
@@ -63,7 +63,7 @@ will still be fetched.
 Run the full pipeline with a single command:
 
 ```bash
-cd /path/to/jobFind && python3 run_job_pipeline.py \
+cd /path/to/jobFind && python3 pipeline/run_job_pipeline.py \
   --location "<CITY, STATE>" \
   --indeed-radius <RADIUS> \
   --indeed-pages <PAGES> \

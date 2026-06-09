@@ -15,7 +15,7 @@ install: ## Install Python deps and download Playwright's Chromium browser
 
 .PHONY: run
 run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, CA")
-	$(PYTHON) run_job_pipeline.py \
+	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
@@ -27,13 +27,13 @@ run-wide: ## Same as run but with a 25-mile radius (good for small cities)
 
 .PHONY: run-skip-indeed
 run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
-	$(PYTHON) run_job_pipeline.py \
+	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
 		--skip-indeed
 
 .PHONY: run-skip-usajobs
 run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
-	$(PYTHON) run_job_pipeline.py \
+	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
