@@ -30,6 +30,16 @@ run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, 
 run-wide: ## Same as run but with a 25-mile radius (good for small cities)
 	$(MAKE) run RADIUS=25
 
+.PHONY: run-fast
+run-fast: ## Faster smoke run with fewer Indeed queries/pages
+	$(PYTHON) pipeline/run_job_pipeline.py \
+		--location "$(LOCATION)" \
+		--indeed-radius $(RADIUS) \
+		--indeed-pages 1 \
+		--indeed-queries cashier "retail associate" barista \
+		--num-usajobs-results 10 \
+		--clean-min-score $(MIN_SCORE)
+
 .PHONY: run-skip-indeed
 run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
 	$(PYTHON) pipeline/run_job_pipeline.py \

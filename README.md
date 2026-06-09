@@ -85,6 +85,9 @@ make run LOCATION="San Jose, CA"
 # Wider search radius (useful for small cities that return few results)
 make run-wide LOCATION="Cupertino, CA"
 
+# Fast smoke run with fewer Indeed queries/pages
+make run-fast LOCATION="Cupertino, CA"
+
 # Re-rank only — reuse existing Indeed CSV, skip scraping
 make run-skip-indeed LOCATION="Cupertino, CA"
 
@@ -110,6 +113,7 @@ All targets:
 make install          Install Python deps + Playwright Chromium
 make run              Run the full pipeline
 make run-wide         Same as run but with a 25-mile radius
+make run-fast         Faster smoke run with fewer Indeed queries/pages
 make run-skip-indeed  Re-rank using the existing Indeed CSV
 make run-skip-usajobs Re-scrape Indeed, skip USAJOBS
 make run-with-careeronestop Include CareerOneStop API results once NLx access is approved
@@ -123,6 +127,11 @@ make help             Show this message
 Override any default:
 ```bash
 make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50 MIN_SCORE=60
+```
+
+For targeted Indeed experiments, pass custom queries directly:
+```bash
+python3 pipeline/run_job_pipeline.py --location "Seattle, WA" --indeed-queries cashier barista "retail associate"
 ```
 
 CareerOneStop-specific options are used by `make run-with-careeronestop`:
@@ -198,8 +207,9 @@ jobFind/
 **`playwright: command not found`** — use `python3 -m playwright install chromium`
 instead, or just run `make install`.
 
-**Indeed returns 0 jobs** — try a wider radius (`make run-wide`) or check if
-Indeed is showing a bot challenge. Debug standalone:
+**Indeed returns 0 jobs** — try a wider radius (`make run-wide`), a faster
+targeted smoke run (`make run-fast`), or check if Indeed is showing a bot
+challenge. Debug standalone:
 `python3 pipeline/scrape_indeed.py --location "City, ST" --pages 1 --queries cashier`
 
 **USAJOBS SSL warning** (`NotOpenSSLWarning`) — harmless on macOS with system

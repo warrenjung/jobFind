@@ -45,8 +45,8 @@ USER_AGENTS = [
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
 ]
@@ -257,114 +257,119 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
                 user_agent=USER_AGENTS[query_index % len(USER_AGENTS)],
                 viewport={"width": 1280, "height": 900},
             )
-            page = context.new_page()
 
-            for page_num in range(pages):
-                start = page_num * 10
-                url = make_search_url(query, location, radius, start)
-                try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                    time.sleep(random.uniform(1.5, 3.0))
-                except PWTimeout:
-                    print(f"    Timeout on page {page_num + 1}, skipping")
-                    break
+            try:
+                page = context.new_page()
 
-                # Check for bot challenge
-                content = page.content()
-                if "cf-challenge" in content or "unusual traffic" in content.lower():
-                    print("    Bot challenge detected — skipping this query")
-                    break
+                for page_num in range(pages):
+                    start = page_num * 10
+                    url = make_search_url(query, location, radius, start)
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                        time.sleep(random.uniform(1.5, 3.0))
+                    except PWTimeout:
+                        print(f"    Timeout on page {page_num + 1}, skipping")
+                        break
 
-                # Extract job cards via DOM using .job_seen_beacon as container
-                cards = page.evaluate("""
-                () => {
-                    const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
-                    const firstText = (el, selectors) => {
-                        for (const selector of selectors) {
-                            const found = el.querySelector(selector);
-                            const text = clean(found ? (found.innerText || found.textContent || '') : '');
-                            if (text) {
-                                return text;
+                    # Check for bot challenge
+                    content = page.content()
+                    if "cf-challenge" in content or "unusual traffic" in content.lower():
+                        print("    Bot challenge detected — skipping this query")
+                        break
+
+                    # Extract job cards via DOM using .job_seen_beacon as container
+                    cards = page.evaluate("""
+                    () => {
+                        const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                        const firstText = (el, selectors) => {
+                            for (const selector of selectors) {
+                                const found = el.querySelector(selector);
+                                const text = clean(found ? (found.innerText || found.textContent || '') : '');
+                                if (text) {
+                                    return text;
+                                }
                             }
-                        }
-                        return '';
-                    };
-                    const cards = [];
-                    document.querySelectorAll('.job_seen_beacon').forEach(el => {
-                        const jkEl = el.querySelector('a[data-jk]');
-                        const jk = jkEl ? jkEl.getAttribute('data-jk') : '';
-                        const postedEl = el.querySelector('[data-testid="myJobsStateDate"], .date');
-                        const attributes = Array.from(
-                            el.querySelectorAll('[data-testid="attribute_snippet_testid"], .salary-snippet-container, .metadata.salary-snippet')
-                        ).map(attr => clean(attr.innerText || attr.textContent || ''))
-                         .filter(Boolean);
+                            return '';
+                        };
+                        const cards = [];
+                        document.querySelectorAll('.job_seen_beacon').forEach(el => {
+                            const jkEl = el.querySelector('a[data-jk]');
+                            const jk = jkEl ? jkEl.getAttribute('data-jk') : '';
+                            const postedEl = el.querySelector('[data-testid="myJobsStateDate"], .date');
+                            const attributes = Array.from(
+                                el.querySelectorAll('[data-testid="attribute_snippet_testid"], .salary-snippet-container, .metadata.salary-snippet')
+                            ).map(attr => clean(attr.innerText || attr.textContent || ''))
+                             .filter(Boolean);
 
-                        cards.push({
-                            jk: jk,
-                            title: firstText(el, ['span[title]', 'a.jcs-JobTitle span', 'a[data-jk]']),
-                            company: firstText(el, ['[data-testid="company-name"]']),
-                            location: firstText(el, ['[data-testid="text-location"]']),
-                            attributes: Array.from(new Set(attributes)),
-                            snippet: firstText(el, [
-                                '[data-testid="belowJobSnippet"]',
-                                '[data-testid="job-snippet"]',
-                                '.job-snippet'
-                            ]),
-                            posted: clean(postedEl ? (postedEl.innerText || postedEl.textContent || '') : ''),
-                            cardText: clean(el.innerText || el.textContent || ''),
+                            cards.push({
+                                jk: jk,
+                                title: firstText(el, ['span[title]', 'a.jcs-JobTitle span', 'a[data-jk]']),
+                                company: firstText(el, ['[data-testid="company-name"]']),
+                                location: firstText(el, ['[data-testid="text-location"]']),
+                                attributes: Array.from(new Set(attributes)),
+                                snippet: firstText(el, [
+                                    '[data-testid="belowJobSnippet"]',
+                                    '[data-testid="job-snippet"]',
+                                    '.job-snippet'
+                                ]),
+                                posted: clean(postedEl ? (postedEl.innerText || postedEl.textContent || '') : ''),
+                                cardText: clean(el.innerText || el.textContent || ''),
+                            });
                         });
-                    });
-                    return cards;
-                }
-                """)
+                        return cards;
+                    }
+                    """)
 
-                if not cards:
-                    print(f"    No cards found on page {page_num + 1}, stopping this query")
-                    break
+                    if not cards:
+                        print(f"    No cards found on page {page_num + 1}, stopping this query")
+                        break
 
-                for c in cards:
-                    if not c.get("title"):
-                        continue
-                    title = clean_text(c.get("title"))
-                    company = clean_text(c.get("company"))
-                    job_location = clean_text(c.get("location")) if c.get("location") else location
-                    job_url = f"https://www.indeed.com/viewjob?jk={c['jk']}" if c.get("jk") else NOT_SPECIFIED
-                    key = dedupe_key(job_url, title, company, job_location)
-                    if key in seen_urls:
-                        continue
-                    seen_urls.add(key)
+                    for c in cards:
+                        if not c.get("title"):
+                            continue
+                        title = clean_text(c.get("title"))
+                        company = clean_text(c.get("company"))
+                        job_location = clean_text(c.get("location")) if c.get("location") else location
+                        job_url = f"https://www.indeed.com/viewjob?jk={c['jk']}" if c.get("jk") else NOT_SPECIFIED
+                        key = dedupe_key(job_url, title, company, job_location)
+                        if key in seen_urls:
+                            continue
+                        seen_urls.add(key)
 
-                    pay, job_type, schedule = classify_attributes(c.get("attributes") or [])
-                    snippet = clean_text(c.get("snippet"))
-                    card_text = clean_text(c.get("cardText"))
-                    search_text = " ".join(
-                        text for text in (snippet, card_text) if text != NOT_SPECIFIED
-                    ).lower()
-                    for jt in ("full-time", "part-time", "temporary", "contract", "internship"):
-                        if job_type == NOT_SPECIFIED and jt in search_text:
-                            job_type = jt.title()
-                            break
-                    for sc in ("evenings", "weekends", "mornings", "nights", "flexible", "shift"):
-                        if schedule == NOT_SPECIFIED and sc in search_text:
-                            schedule = sc.title()
-                            break
+                        pay, job_type, schedule = classify_attributes(c.get("attributes") or [])
+                        snippet = clean_text(c.get("snippet"))
+                        card_text = clean_text(c.get("cardText"))
+                        search_text = " ".join(
+                            text for text in (snippet, card_text) if text != NOT_SPECIFIED
+                        ).lower()
+                        for jt in ("full-time", "part-time", "temporary", "contract", "internship"):
+                            if job_type == NOT_SPECIFIED and jt in search_text:
+                                job_type = jt.title()
+                                break
+                        for sc in ("evenings", "weekends", "mornings", "nights", "flexible", "shift"):
+                            if schedule == NOT_SPECIFIED and sc in search_text:
+                                schedule = sc.title()
+                                break
 
-                    all_jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": job_location,
-                        "pay": pay,
-                        "job_type": job_type,
-                        "schedule_hours": schedule,
-                        "date_posted": clean_text(c.get("posted")),
-                        "description_snippet": snippet[:300],
-                        "job_url": job_url,
-                    })
+                        all_jobs.append({
+                            "title": title,
+                            "company": company,
+                            "location": job_location,
+                            "pay": pay,
+                            "job_type": job_type,
+                            "schedule_hours": schedule,
+                            "date_posted": clean_text(c.get("posted")),
+                            "description_snippet": snippet[:300],
+                            "job_url": job_url,
+                            "search_query": query,
+                            "search_page": page_num + 1,
+                            "search_start": start,
+                        })
 
-                print(f"    Page {page_num + 1}: {len(cards)} cards ({len(all_jobs)} total so far)")
-                time.sleep(random.uniform(1.0, 2.5))
-
-            context.close()
+                    print(f"    Page {page_num + 1}: {len(cards)} cards ({len(all_jobs)} total so far)")
+                    time.sleep(random.uniform(1.0, 2.5))
+            finally:
+                context.close()
 
             # Space queries apart to avoid Indeed's soft block (skip after last).
             if query_index < len(queries) - 1:

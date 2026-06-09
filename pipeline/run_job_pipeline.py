@@ -88,25 +88,27 @@ def scrape_indeed(
     location_slug: str,
     radius: int,
     pages: int,
+    queries: Optional[list[str]],
 ) -> Path:
     """Run the Playwright-based Indeed scraper and return the output JSON path."""
     if not INDEED_SCRAPER.exists():
         raise SystemExit(f"Could not find Indeed scraper at {INDEED_SCRAPER}.")
     output_json = DATA_DIR / f"jobs_scraped_{location_slug}.json"
-    run_command(
-        [
-            sys.executable,
-            str(INDEED_SCRAPER),
-            "--location",
-            location,
-            "--radius",
-            str(radius),
-            "--pages",
-            str(pages),
-            "--output",
-            str(output_json),
-        ]
-    )
+    command = [
+        sys.executable,
+        str(INDEED_SCRAPER),
+        "--location",
+        location,
+        "--radius",
+        str(radius),
+        "--pages",
+        str(pages),
+        "--output",
+        str(output_json),
+    ]
+    if queries:
+        command.extend(["--queries", *queries])
+    run_command(command)
     return output_json
 
 
@@ -297,6 +299,12 @@ def main() -> None:
         help="Pages per Indeed search query (10 results each). Default: 3.",
     )
     parser.add_argument(
+        "--indeed-queries",
+        nargs="+",
+        default=None,
+        help="Optional Indeed search queries. Default: scraper's built-in list.",
+    )
+    parser.add_argument(
         "--careeronestop-radius",
         type=int,
         default=None,
@@ -352,7 +360,13 @@ def main() -> None:
     if args.skip_indeed:
         indeed_csv = find_existing_indeed_csv(location_slug, city_slug, args.indeed_file)
     else:
-        scraped_json = scrape_indeed(args.location, location_slug, args.indeed_radius, args.indeed_pages)
+        scraped_json = scrape_indeed(
+            args.location,
+            location_slug,
+            args.indeed_radius,
+            args.indeed_pages,
+            args.indeed_queries,
+        )
         indeed_csv = ensure_indeed_csv(
             location_slug,
             city_slug,
