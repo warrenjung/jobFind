@@ -121,8 +121,38 @@ def is_likely_title(line: str) -> bool:
     return bool(re.match(r"[A-Z]", line))
 
 
+# Matches a real pay phrase, e.g. "$18.70 an hour", "$21 - $25 an hour",
+# "From $18.45 an hour", "$50,000 - $60,000 a year". A pay-unit suffix is
+# required so stray "$" tokens inside CSS/JS/config blobs are not mistaken
+# for pay.
+PAY_RE = re.compile(
+    r"(?:from\s+|up\s+to\s+|starting\s+at\s+)?"
+    r"\$\d[\d,]*(?:\.\d{1,2})?"
+    r"(?:\s*[-–to]+\s*\$?\d[\d,]*(?:\.\d{1,2})?)?"
+    r"\s*(?:an?|per|/)\s*(?:hour|hr|year|yr|week|wk|day|month|mo)",
+    re.IGNORECASE,
+)
+
+# Characters/markers that signal the text is markup or injected config, not a
+# human-readable pay chip.
+_MARKUP_MARKERS = ("{", "}", "<", ">", "mosaic", "function", "px", "@media")
+
+
+def looks_like_markup(text: str) -> bool:
+    lowered = text.lower()
+    return len(text) > 80 or any(marker in lowered for marker in _MARKUP_MARKERS)
+
+
+def extract_pay(text: str) -> Optional[str]:
+    """Return a clean pay phrase from text, or None if none is present."""
+    if not text or looks_like_markup(text):
+        return None
+    match = PAY_RE.search(text)
+    return match.group(0).strip() if match else None
+
+
 def is_pay_line(line: str) -> bool:
-    return bool(re.search(r"\$[\d,]+", line))
+    return extract_pay(line) is not None
 
 
 def is_job_type(line: str) -> bool:
@@ -171,10 +201,11 @@ def classify_attributes(attributes: list[str]) -> tuple[str, str, str]:
 
     for raw_attribute in attributes:
         attribute = clean_text(raw_attribute)
-        if attribute == NOT_SPECIFIED:
+        if attribute == NOT_SPECIFIED or looks_like_markup(attribute):
             continue
-        if pay == NOT_SPECIFIED and is_pay_line(attribute):
-            pay = attribute
+        pay_phrase = extract_pay(attribute)
+        if pay == NOT_SPECIFIED and pay_phrase:
+            pay = pay_phrase
         elif job_type == NOT_SPECIFIED and is_job_type(attribute):
             job_type = attribute
         elif is_schedule(attribute):
@@ -251,7 +282,7 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
                         const jk = jkEl ? jkEl.getAttribute('data-jk') : '';
                         const postedEl = el.querySelector('[data-testid="myJobsStateDate"], .date');
                         const attributes = Array.from(
-                            el.querySelectorAll('[data-testid*="attribute_snippet_testid"], .salary-snippet-container')
+                            el.querySelectorAll('[data-testid="attribute_snippet_testid"], .salary-snippet-container, .metadata.salary-snippet')
                         ).map(attr => clean(attr.innerText || attr.textContent || ''))
                          .filter(Boolean);
 
