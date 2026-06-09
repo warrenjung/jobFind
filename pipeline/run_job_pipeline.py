@@ -301,6 +301,8 @@ def main() -> None:
             args.clean_output,
             "--min-score",
             str(args.clean_min_score),
+            "--location",
+            args.location,
         ]
         if args.clean_limit is not None:
             clean_table_command.extend(["--limit", str(args.clean_limit)])

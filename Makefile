@@ -3,6 +3,7 @@ RADIUS   ?= 10
 PAGES    ?= 3
 RESULTS  ?= 25
 MIN_SCORE ?= 50
+PORT     ?= 8000
 PYTHON   := python3
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -47,7 +48,12 @@ run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
 
 .PHONY: table
 table: ## Regenerate the clean HTML cards from existing ranked jobs
-	$(PYTHON) pipeline/export_clean_table.py --min-score $(MIN_SCORE)
+	$(PYTHON) pipeline/export_clean_table.py --min-score $(MIN_SCORE) --location "$(LOCATION)"
+
+.PHONY: serve
+serve: ## Serve the HTML results over HTTP (default port 8000; override with PORT=)
+	@echo "Open http://localhost:$(PORT)/jobs_clean.html  (Ctrl+C to stop)"
+	$(PYTHON) -m http.server $(PORT) --directory data
 
 .PHONY: clean
 clean: ## Remove all generated output files (data/)

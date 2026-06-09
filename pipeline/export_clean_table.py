@@ -38,10 +38,47 @@ def truncate(text: str, max_length: int = DESCRIPTION_LIMIT) -> str:
 
 
 def clean_description(job: dict[str, Any]) -> str:
-    """Return the user-facing job description."""
+    """Return the real job description (USAJOBS); empty for Indeed listings."""
     description = clean_text(job.get("description"))
     if description != NOT_SPECIFIED:
         return truncate(description)
+    return NOT_SPECIFIED
+
+
+def why_it_fits(job: dict[str, Any]) -> str:
+    """Return the teen-fit reason.
+
+    Indeed's results page no longer exposes a description snippet, but the
+    filter step always records why a listing suits an entry-level candidate.
+    """
+    return truncate(clean_text(job.get("teen_fit_reason")))
+
+
+def format_type_schedule(job: dict[str, Any]) -> str:
+    """Combine job type and schedule into one display value."""
+    job_type = clean_text(job.get("job_type"))
+    schedule = clean_text(job.get("schedule"))
+    parts = [part for part in (job_type, schedule) if part != NOT_SPECIFIED]
+    return " · ".join(dict.fromkeys(parts)) if parts else NOT_SPECIFIED
+
+
+def format_location(job: dict[str, Any]) -> str:
+    """Return a concise city/state for display."""
+    city = clean_text(job.get("city"))
+    state = clean_text(job.get("state"))
+    parts = [part for part in (city, state) if part != NOT_SPECIFIED]
+    if parts:
+        return ", ".join(parts)
+    return clean_text(job.get("location"))
+
+
+def format_source(job: dict[str, Any]) -> str:
+    """Human-friendly label for the job source."""
+    source = clean_text(job.get("source")).lower()
+    if source == "indeed":
+        return "Indeed"
+    if source == "usajobs":
+        return "USAJOBS"
     return NOT_SPECIFIED
 
 
@@ -82,6 +119,11 @@ def job_score(job: dict[str, Any]) -> Optional[float]:
         return None
 
 
+def sorted_by_score(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort jobs by score descending so output is ranked even if input isn't."""
+    return sorted(jobs, key=lambda job: (job_score(job) is not None, job_score(job) or 0), reverse=True)
+
+
 def filtered_jobs(
     jobs: list[dict[str, Any]],
     min_score: Optional[float],
@@ -90,6 +132,15 @@ def filtered_jobs(
     if min_score is None:
         return jobs
     return [job for job in jobs if (job_score(job) or 0) >= min_score]
+
+
+def prepared_jobs(
+    jobs: list[dict[str, Any]],
+    limit: Optional[int],
+    min_score: Optional[float],
+) -> list[dict[str, Any]]:
+    """Filter, sort, and limit jobs for display."""
+    return limited_jobs(sorted_by_score(filtered_jobs(jobs, min_score)), limit)
 
 
 def parse_limit(value: Optional[int]) -> Optional[int]:
@@ -133,11 +184,14 @@ def build_markdown_table(
     min_score: Optional[float],
 ) -> str:
     """Build the clean Markdown table."""
-    shown_jobs = limited_jobs(filtered_jobs(jobs, min_score), limit)
+    shown_jobs = prepared_jobs(jobs, limit, min_score)
     headers = [
         "Job",
         "Employer",
-        "Job Description",
+        "Source",
+        "Location",
+        "Type",
+        "Why it fits",
         "Pay",
         "Distance",
         "Score",
@@ -145,14 +199,21 @@ def build_markdown_table(
     ]
     lines = [
         "| " + " | ".join(headers) + " |",
-        "|-----|----------|-----------------|-----|----------|-------|---------------|",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
     ]
 
     for job in shown_jobs:
+        # Prefer a real description (USAJOBS); fall back to the fit reason (Indeed).
+        highlight = clean_description(job)
+        if highlight == NOT_SPECIFIED:
+            highlight = why_it_fits(job)
         row = [
             escape_markdown_table_cell(job.get("title")),
             escape_markdown_table_cell(job.get("company")),
-            escape_markdown_table_cell(clean_description(job)),
+            escape_markdown_table_cell(format_source(job)),
+            escape_markdown_table_cell(format_location(job)),
+            escape_markdown_table_cell(format_type_schedule(job)),
+            escape_markdown_table_cell(highlight),
             escape_markdown_table_cell(job.get("pay")),
             escape_markdown_table_cell(format_distance(job.get("distance_miles"))),
             escape_markdown_table_cell(job.get("student_fit_score")),
@@ -177,62 +238,72 @@ def format_html_apply_link(url: Any) -> str:
     return f'<a class="apply-link" href="{safe_url}" target="_blank" rel="noopener">Apply</a>'
 
 
-def summary_text(shown_count: int, min_score: Optional[float]) -> str:
+def summary_text(shown_count: int, min_score: Optional[float], location: Optional[str]) -> str:
     """Return a short summary for the clean output header."""
+    where = f" near {location}" if location else ""
     if min_score is None or min_score <= 0:
-        return f"{shown_count} jobs, sorted by student fit score."
-    return f"{shown_count} jobs rated {min_score:g}+ and sorted by student fit score."
+        return f"{shown_count} jobs{where}, sorted by student fit score."
+    return f"{shown_count} jobs{where} rated {min_score:g}+ and sorted by student fit score."
+
+
+def detail_row(label: str, value: str) -> str:
+    """Render one definition row, skipping empty values."""
+    if value == NOT_SPECIFIED:
+        return ""
+    return f"""
+          <div>
+            <dt>{html.escape(label, quote=True)}</dt>
+            <dd>{value}</dd>
+          </div>"""
 
 
 def build_html_cards(
     jobs: list[dict[str, Any]],
     limit: Optional[int],
     min_score: Optional[float],
+    location: Optional[str] = None,
 ) -> str:
     """Build a browser-friendly HTML page with one card per job."""
-    shown_jobs = limited_jobs(filtered_jobs(jobs, min_score), limit)
+    shown_jobs = prepared_jobs(jobs, limit, min_score)
     cards = []
 
     for index, job in enumerate(shown_jobs, start=1):
         title = html_text(job.get("title"))
-        employer = html_text(job.get("company"))
-        description = html_text(clean_description(job))
-        pay = html_text(job.get("pay"))
-        distance = html_text(format_distance(job.get("distance_miles")))
-        score = html_text(job.get("student_fit_score"))
-        apply_link = format_html_apply_link(job.get("url"))
+        source = html_text(format_source(job))
+        rows = "".join(
+            [
+                detail_row("Employer", html_text(job.get("company"))),
+                detail_row("Location", html_text(format_location(job))),
+                detail_row("Type", html_text(format_type_schedule(job))),
+                detail_row("Job Description", html_text(clean_description(job))),
+                detail_row("Why it fits", html_text(why_it_fits(job))),
+                detail_row("Pay", html_text(job.get("pay"))),
+                detail_row("Distance", html_text(format_distance(job.get("distance_miles")))),
+                detail_row("Link to Apply", format_html_apply_link(job.get("url"))),
+            ]
+        )
+        source_badge = (
+            f'<span class="source">{source}</span>' if source != NOT_SPECIFIED else ""
+        )
 
         cards.append(
             f"""
       <article class="job-card">
         <div class="card-topline">
           <span class="rank">#{index}</span>
-          <span class="score">Score {score}</span>
+          {source_badge}
+          <span class="score">Score {html_text(job.get("student_fit_score"))}</span>
         </div>
         <h2>{title}</h2>
-        <dl>
-          <div>
-            <dt>Employer</dt>
-            <dd>{employer}</dd>
-          </div>
-          <div>
-            <dt>Job Description</dt>
-            <dd>{description}</dd>
-          </div>
-          <div>
-            <dt>Pay</dt>
-            <dd>{pay}</dd>
-          </div>
-          <div>
-            <dt>Distance</dt>
-            <dd>{distance}</dd>
-          </div>
-          <div>
-            <dt>Link to Apply</dt>
-            <dd>{apply_link}</dd>
-          </div>
+        <dl>{rows}
         </dl>
       </article>"""
+        )
+
+    if not cards:
+        cards.append(
+            '\n      <p class="empty">No jobs matched the current filters. '
+            'Try lowering the minimum score (MIN_SCORE=0) or widening the search radius.</p>'
         )
 
     return f"""<!doctype html>
@@ -312,6 +383,28 @@ def build_html_cards(
     .score {{
       color: var(--accent-strong);
       font-weight: 700;
+      margin-left: auto;
+    }}
+
+    .source {{
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
+
+    .empty {{
+      background: var(--card);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
     }}
 
     h2 {{
@@ -383,8 +476,8 @@ def build_html_cards(
 <body>
   <main>
     <header>
-      <h1>Job Results</h1>
-      <p class="summary">{html.escape(summary_text(len(shown_jobs), min_score), quote=True)}</p>
+      <h1>{html.escape(f"Jobs near {location}" if location else "Job Results", quote=True)}</h1>
+      <p class="summary">{html.escape(summary_text(len(shown_jobs), min_score, location), quote=True)}</p>
     </header>
     <section class="jobs">
 {''.join(cards)}
@@ -441,6 +534,11 @@ def main() -> None:
             f"Default: {DEFAULT_MIN_SCORE}. Use 0 to show all jobs."
         ),
     )
+    parser.add_argument(
+        "--location",
+        default=None,
+        help="Search location to show in the page header (e.g. 'Cupertino, CA').",
+    )
     args = parser.parse_args()
 
     jobs = load_jobs(args.input)
@@ -451,7 +549,7 @@ def main() -> None:
     if args.format == "markdown":
         content = build_markdown_table(jobs, limit, min_score)
     else:
-        content = build_html_cards(jobs, limit, min_score)
+        content = build_html_cards(jobs, limit, min_score, args.location)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8")

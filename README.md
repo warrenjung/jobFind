@@ -12,14 +12,14 @@ USAJOBS API ──────────────────────�
                                              ▼
 Indeed (Playwright headless browser) ──► rank_jobs.py ──► jobs_ranked.json
   └─ scrape_indeed.py
-  └─ indeed-job-scrape/scripts/build_csv.py (filter)
+  └─ pipeline/build_csv.py (filter)
                                              ▼
                                       jobs_clean.html
 ```
 
 1. `usajobs_summer_scraper.py` — fetches temporary/seasonal roles from USAJOBS
 2. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser (Playwright)
-3. `indeed-job-scrape/scripts/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
+3. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
 4. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
 5. `export_clean_table.py` — exports easy-to-read HTML job cards
 6. `run_job_pipeline.py` — orchestrates all of the above in one command
@@ -74,6 +74,9 @@ make run-skip-usajobs LOCATION="Cupertino, CA"
 # Rebuild the readable HTML cards from existing ranked jobs
 make table
 
+# Serve the HTML results in a browser (http://localhost:8000/jobs_clean.html)
+make serve
+
 # Remove all generated output files
 make clean
 ```
@@ -87,6 +90,7 @@ make run-wide         Same as run but with a 25-mile radius
 make run-skip-indeed  Re-rank using the existing Indeed CSV
 make run-skip-usajobs Re-scrape Indeed, skip USAJOBS
 make table            Regenerate the readable HTML cards
+make serve            Serve the HTML results over HTTP (port 8000)
 make clean            Remove all generated output files
 make help             Show this message
 ```
