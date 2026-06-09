@@ -39,6 +39,18 @@ SEARCH_QUERIES = [
 
 NOT_SPECIFIED = "Not specified"
 
+# Rotated per query so consecutive searches don't share one fingerprint.
+USER_AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+]
+
 
 def make_search_url(query: str, location: str, radius: int, start: int) -> str:
     return (
@@ -234,18 +246,19 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 900},
-        )
-        page = context.new_page()
 
-        for query in queries:
+        # Indeed soft-blocks a reused context after the first page load, so each
+        # query gets a fresh context (clean cookies + rotated user-agent) and the
+        # queries are spaced out. This is what lets all queries return results
+        # instead of only the first one.
+        for query_index, query in enumerate(queries):
             print(f"  Searching: {query!r} near {location}")
+            context = browser.new_context(
+                user_agent=USER_AGENTS[query_index % len(USER_AGENTS)],
+                viewport={"width": 1280, "height": 900},
+            )
+            page = context.new_page()
+
             for page_num in range(pages):
                 start = page_num * 10
                 url = make_search_url(query, location, radius, start)
@@ -350,6 +363,12 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
 
                 print(f"    Page {page_num + 1}: {len(cards)} cards ({len(all_jobs)} total so far)")
                 time.sleep(random.uniform(1.0, 2.5))
+
+            context.close()
+
+            # Space queries apart to avoid Indeed's soft block (skip after last).
+            if query_index < len(queries) - 1:
+                time.sleep(random.uniform(5.0, 9.0))
 
         browser.close()
 
