@@ -2,6 +2,7 @@ LOCATION ?= Cupertino, CA
 RADIUS   ?= 10
 PAGES    ?= 3
 RESULTS  ?= 25
+MIN_SCORE ?= 50
 PYTHON   := python3
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -19,7 +20,8 @@ run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, 
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
-		--num-usajobs-results $(RESULTS)
+		--num-usajobs-results $(RESULTS) \
+		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-wide
 run-wide: ## Same as run but with a 25-mile radius (good for small cities)
@@ -29,7 +31,8 @@ run-wide: ## Same as run but with a 25-mile radius (good for small cities)
 run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
 	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
-		--skip-indeed
+		--skip-indeed \
+		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-skip-usajobs
 run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
@@ -37,9 +40,14 @@ run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
-		--skip-usajobs
+		--skip-usajobs \
+		--clean-min-score $(MIN_SCORE)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+
+.PHONY: table
+table: ## Regenerate the clean HTML cards from existing ranked jobs
+	$(PYTHON) pipeline/export_clean_table.py --min-score $(MIN_SCORE)
 
 .PHONY: clean
 clean: ## Remove all generated output files (data/)

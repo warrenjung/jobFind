@@ -13,13 +13,16 @@ USAJOBS API ──────────────────────�
 Indeed (Playwright headless browser) ──► rank_jobs.py ──► jobs_ranked.json
   └─ scrape_indeed.py
   └─ indeed-job-scrape/scripts/build_csv.py (filter)
+                                             ▼
+                                      jobs_clean.html
 ```
 
 1. `usajobs_summer_scraper.py` — fetches temporary/seasonal roles from USAJOBS
 2. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser (Playwright)
 3. `indeed-job-scrape/scripts/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
 4. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
-5. `run_job_pipeline.py` — orchestrates all of the above in one command
+5. `export_clean_table.py` — exports easy-to-read HTML job cards
+6. `run_job_pipeline.py` — orchestrates all of the above in one command
 
 ## Setup
 
@@ -68,6 +71,9 @@ make run-skip-indeed LOCATION="Cupertino, CA"
 # Re-scrape Indeed only — skip USAJOBS fetch
 make run-skip-usajobs LOCATION="Cupertino, CA"
 
+# Rebuild the readable HTML cards from existing ranked jobs
+make table
+
 # Remove all generated output files
 make clean
 ```
@@ -80,14 +86,18 @@ make run              Run the full pipeline
 make run-wide         Same as run but with a 25-mile radius
 make run-skip-indeed  Re-rank using the existing Indeed CSV
 make run-skip-usajobs Re-scrape Indeed, skip USAJOBS
+make table            Regenerate the readable HTML cards
 make clean            Remove all generated output files
 make help             Show this message
 ```
 
 Override any default:
 ```bash
-make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50
+make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50 MIN_SCORE=60
 ```
+
+The readable HTML output hides obvious poor fits by default, only showing jobs
+with a score of 50 or higher. Use `MIN_SCORE=0` to show every ranked job.
 
 ## Output files
 
@@ -95,13 +105,19 @@ All generated files are written to `data/` (created automatically, gitignored):
 
 | File | Description |
 |------|-------------|
+| `data/jobs_clean.html` | Clean readable job cards rated 50+ with job, employer, description, pay, distance, score, and apply link |
+| `data/jobs_clean.md` | Optional raw Markdown table export |
+| `data/jobs_ranked.json` | Detailed ranked list from both sources |
 | `data/jobs_raw.json` | Raw USAJOBS results |
 | `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |
 | `data/indeed_jobs_<city>.csv` | Filtered teen-friendly Indeed jobs |
 | `data/indeed_jobs_<city>_excluded.csv` | Filtered-out jobs and reasons |
-| `data/jobs_ranked.json` | Final ranked list from both sources |
 
-Run `make clean` to remove the whole `data/` directory.
+Most users should open `data/jobs_clean.html` in a browser first. The detailed
+`data/jobs_ranked.json` file keeps the full ranked list, including lower-scored
+jobs hidden from the clean page. The optional `data/jobs_clean.md` file is raw
+Markdown and can look strange in plain text editors if the app does not render
+Markdown tables. Run `make clean` to remove the whole `data/` directory.
 
 ## Claude Code skill
 
@@ -130,6 +146,7 @@ jobFind/
 │   ├── run_job_pipeline.py         # Main orchestrator
 │   ├── scrape_indeed.py            # Headless Indeed scraper (Playwright)
 │   ├── rank_jobs.py                # Scoring + ranking engine
+│   ├── export_clean_table.py       # Human-readable HTML/Markdown exporter
 │   ├── usajobs_summer_scraper.py   # USAJOBS API client
 │   └── build_csv.py               # Filter scraped JSON → clean CSV
 ├── data/                           # Generated outputs (gitignored, auto-created)

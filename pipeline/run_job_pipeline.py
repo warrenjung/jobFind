@@ -6,6 +6,7 @@ This script coordinates the pieces in this project:
 2. Scrape Indeed with a headless Playwright browser (scrape_indeed.py).
 3. Build an Indeed CSV from the scraped JSON (build_csv.py).
 4. Rank the combined USAJOBS + Indeed results into jobs_ranked.json.
+5. Export a clean HTML page for easy reading.
 
 Pass --skip-indeed to skip steps 2-3 and use an existing Indeed CSV.
 """
@@ -25,9 +26,12 @@ DATA_DIR = _HERE.parent / "data"
 DEFAULT_LOCATION = "Cupertino, CA"
 DEFAULT_USAJOBS_FILE = DATA_DIR / "jobs_raw.json"
 DEFAULT_RANKED_FILE = DATA_DIR / "jobs_ranked.json"
+DEFAULT_CLEAN_FILE = DATA_DIR / "jobs_clean.html"
+DEFAULT_CLEAN_MIN_SCORE = 50
 DEFAULT_RESULTS = 25
 INDEED_HELPER = _HERE / "build_csv.py"
 INDEED_SCRAPER = _HERE / "scrape_indeed.py"
+CLEAN_TABLE_EXPORTER = _HERE / "export_clean_table.py"
 
 
 def slugify_location(location: str) -> str:
@@ -177,6 +181,31 @@ def main() -> None:
         help=f"Ranked output JSON file. Default: {DEFAULT_RANKED_FILE}.",
     )
     parser.add_argument(
+        "--clean-output",
+        default=DEFAULT_CLEAN_FILE,
+        help=f"Clean HTML output file. Default: {DEFAULT_CLEAN_FILE}.",
+    )
+    parser.add_argument(
+        "--clean-limit",
+        type=int,
+        default=None,
+        help="Optional number of top jobs to include in the clean output.",
+    )
+    parser.add_argument(
+        "--clean-min-score",
+        type=float,
+        default=DEFAULT_CLEAN_MIN_SCORE,
+        help=(
+            "Minimum score to include in the clean output. "
+            f"Default: {DEFAULT_CLEAN_MIN_SCORE}. Use 0 to show all jobs."
+        ),
+    )
+    parser.add_argument(
+        "--skip-clean-table",
+        action="store_true",
+        help="Skip generating the clean readable output.",
+    )
+    parser.add_argument(
         "--num-usajobs-results",
         type=int,
         default=DEFAULT_RESULTS,
@@ -261,6 +290,22 @@ def main() -> None:
             str(args.preview_count),
         ]
     )
+
+    if not args.skip_clean_table:
+        clean_table_command = [
+            sys.executable,
+            str(CLEAN_TABLE_EXPORTER),
+            "--input",
+            args.ranked_output,
+            "--output",
+            args.clean_output,
+            "--min-score",
+            str(args.clean_min_score),
+        ]
+        if args.clean_limit is not None:
+            clean_table_command.extend(["--limit", str(args.clean_limit)])
+        run_command(clean_table_command)
+        print(f"\nClean table saved to {args.clean_output}")
 
     print(f"\nDone. Ranked jobs saved to {args.ranked_output}")
 

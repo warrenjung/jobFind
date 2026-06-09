@@ -1,0 +1,462 @@
+"""
+Export readable job results from ranked job data.
+
+Default input: data/jobs_ranked.json
+Default output: data/jobs_clean.html
+"""
+
+import argparse
+import html
+import json
+import re
+from pathlib import Path
+from typing import Any, Optional
+
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+DEFAULT_INPUT_FILE = DATA_DIR / "jobs_ranked.json"
+DEFAULT_OUTPUT_FILE = DATA_DIR / "jobs_clean.html"
+NOT_SPECIFIED = "Not specified"
+DESCRIPTION_LIMIT = 220
+DEFAULT_MIN_SCORE = 50
+
+
+def clean_text(value: Any) -> str:
+    """Normalize generated job values for display."""
+    if value is None:
+        return NOT_SPECIFIED
+    text = str(value).replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if text else NOT_SPECIFIED
+
+
+def truncate(text: str, max_length: int = DESCRIPTION_LIMIT) -> str:
+    """Keep long descriptions readable."""
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3].rstrip()}..."
+
+
+def clean_description(job: dict[str, Any]) -> str:
+    """Return the user-facing job description."""
+    description = clean_text(job.get("description"))
+    if description != NOT_SPECIFIED:
+        return truncate(description)
+    return NOT_SPECIFIED
+
+
+def format_distance(distance: Any) -> str:
+    """Format miles from the search location for display."""
+    if distance is None:
+        return NOT_SPECIFIED
+    try:
+        return f"{float(distance):.1f} miles"
+    except (TypeError, ValueError):
+        return clean_text(distance)
+
+
+def load_jobs(filename: Path) -> list[dict[str, Any]]:
+    """Load ranked jobs from JSON."""
+    with filename.open("r", encoding="utf-8") as file:
+        jobs = json.load(file)
+    if not isinstance(jobs, list):
+        raise SystemExit(f"{filename} must contain a list of ranked jobs.")
+    return [job for job in jobs if isinstance(job, dict)]
+
+
+def limited_jobs(jobs: list[dict[str, Any]], limit: Optional[int]) -> list[dict[str, Any]]:
+    """Apply an optional top-N limit."""
+    if limit is None:
+        return jobs
+    return jobs[:limit]
+
+
+def job_score(job: dict[str, Any]) -> Optional[float]:
+    """Return a numeric student fit score when one is available."""
+    value = job.get("student_fit_score")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def filtered_jobs(
+    jobs: list[dict[str, Any]],
+    min_score: Optional[float],
+) -> list[dict[str, Any]]:
+    """Hide jobs below the visible-score threshold."""
+    if min_score is None:
+        return jobs
+    return [job for job in jobs if (job_score(job) or 0) >= min_score]
+
+
+def parse_limit(value: Optional[int]) -> Optional[int]:
+    """Validate optional row/card limit."""
+    if value is None:
+        return None
+    if value < 1:
+        raise SystemExit("--limit must be greater than 0.")
+    return value
+
+
+def parse_min_score(value: Optional[float]) -> Optional[float]:
+    """Validate optional minimum score filter."""
+    if value is None:
+        return None
+    if value < 0 or value > 100:
+        raise SystemExit("--min-score must be between 0 and 100.")
+    return value
+
+
+def escape_markdown_table_cell(value: Any) -> str:
+    """Escape text that would break a Markdown table row."""
+    text = clean_text(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("|", "\\|")
+    return text
+
+
+def format_markdown_apply_link(url: Any) -> str:
+    """Return a clickable Markdown apply link when a valid URL exists."""
+    text = clean_text(url)
+    if text == NOT_SPECIFIED or not text.startswith(("http://", "https://")):
+        return NOT_SPECIFIED
+    safe_url = text.replace(")", "%29").replace("(", "%28")
+    return f"[Apply]({safe_url})"
+
+
+def build_markdown_table(
+    jobs: list[dict[str, Any]],
+    limit: Optional[int],
+    min_score: Optional[float],
+) -> str:
+    """Build the clean Markdown table."""
+    shown_jobs = limited_jobs(filtered_jobs(jobs, min_score), limit)
+    headers = [
+        "Job",
+        "Employer",
+        "Job Description",
+        "Pay",
+        "Distance",
+        "Score",
+        "Link to Apply",
+    ]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|-----|----------|-----------------|-----|----------|-------|---------------|",
+    ]
+
+    for job in shown_jobs:
+        row = [
+            escape_markdown_table_cell(job.get("title")),
+            escape_markdown_table_cell(job.get("company")),
+            escape_markdown_table_cell(clean_description(job)),
+            escape_markdown_table_cell(job.get("pay")),
+            escape_markdown_table_cell(format_distance(job.get("distance_miles"))),
+            escape_markdown_table_cell(job.get("student_fit_score")),
+            format_markdown_apply_link(job.get("url")),
+        ]
+        lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(lines) + "\n"
+
+
+def html_text(value: Any) -> str:
+    """Escape plain text for HTML."""
+    return html.escape(clean_text(value), quote=True)
+
+
+def format_html_apply_link(url: Any) -> str:
+    """Return an HTML apply button/link when a valid URL exists."""
+    text = clean_text(url)
+    if text == NOT_SPECIFIED or not text.startswith(("http://", "https://")):
+        return '<span class="missing">Not specified</span>'
+    safe_url = html.escape(text, quote=True)
+    return f'<a class="apply-link" href="{safe_url}" target="_blank" rel="noopener">Apply</a>'
+
+
+def summary_text(shown_count: int, min_score: Optional[float]) -> str:
+    """Return a short summary for the clean output header."""
+    if min_score is None or min_score <= 0:
+        return f"{shown_count} jobs, sorted by student fit score."
+    return f"{shown_count} jobs rated {min_score:g}+ and sorted by student fit score."
+
+
+def build_html_cards(
+    jobs: list[dict[str, Any]],
+    limit: Optional[int],
+    min_score: Optional[float],
+) -> str:
+    """Build a browser-friendly HTML page with one card per job."""
+    shown_jobs = limited_jobs(filtered_jobs(jobs, min_score), limit)
+    cards = []
+
+    for index, job in enumerate(shown_jobs, start=1):
+        title = html_text(job.get("title"))
+        employer = html_text(job.get("company"))
+        description = html_text(clean_description(job))
+        pay = html_text(job.get("pay"))
+        distance = html_text(format_distance(job.get("distance_miles")))
+        score = html_text(job.get("student_fit_score"))
+        apply_link = format_html_apply_link(job.get("url"))
+
+        cards.append(
+            f"""
+      <article class="job-card">
+        <div class="card-topline">
+          <span class="rank">#{index}</span>
+          <span class="score">Score {score}</span>
+        </div>
+        <h2>{title}</h2>
+        <dl>
+          <div>
+            <dt>Employer</dt>
+            <dd>{employer}</dd>
+          </div>
+          <div>
+            <dt>Job Description</dt>
+            <dd>{description}</dd>
+          </div>
+          <div>
+            <dt>Pay</dt>
+            <dd>{pay}</dd>
+          </div>
+          <div>
+            <dt>Distance</dt>
+            <dd>{distance}</dd>
+          </div>
+          <div>
+            <dt>Link to Apply</dt>
+            <dd>{apply_link}</dd>
+          </div>
+        </dl>
+      </article>"""
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Results</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #17202a;
+      --muted: #5e6b78;
+      --line: #d9dee5;
+      --accent: #0f6b5f;
+      --accent-strong: #0a4f46;
+    }}
+
+    * {{
+      box-sizing: border-box;
+    }}
+
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }}
+
+    main {{
+      width: min(1080px, calc(100% - 32px));
+      margin: 32px auto 48px;
+    }}
+
+    header {{
+      margin-bottom: 20px;
+    }}
+
+    h1 {{
+      margin: 0 0 6px;
+      font-size: 28px;
+      font-weight: 700;
+    }}
+
+    .summary {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }}
+
+    .jobs {{
+      display: grid;
+      gap: 14px;
+    }}
+
+    .job-card {{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }}
+
+    .card-topline {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+
+    .score {{
+      color: var(--accent-strong);
+      font-weight: 700;
+    }}
+
+    h2 {{
+      margin: 0 0 14px;
+      font-size: 20px;
+      line-height: 1.25;
+    }}
+
+    dl {{
+      display: grid;
+      gap: 10px;
+      margin: 0;
+    }}
+
+    dl > div {{
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 14px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }}
+
+    dt {{
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }}
+
+    dd {{
+      margin: 0;
+      overflow-wrap: anywhere;
+    }}
+
+    .apply-link {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 700;
+      text-decoration: none;
+    }}
+
+    .apply-link:hover {{
+      background: var(--accent-strong);
+    }}
+
+    .missing {{
+      color: var(--muted);
+    }}
+
+    @media (max-width: 640px) {{
+      main {{
+        width: min(100% - 20px, 1080px);
+        margin-top: 20px;
+      }}
+
+      dl > div {{
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Job Results</h1>
+      <p class="summary">{html.escape(summary_text(len(shown_jobs), min_score), quote=True)}</p>
+    </header>
+    <section class="jobs">
+{''.join(cards)}
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def infer_output_path(output: Optional[Path], output_format: str) -> Path:
+    """Choose the default output file for the selected format."""
+    if output is not None:
+        return output
+    if output_format == "markdown":
+        return DATA_DIR / "jobs_clean.md"
+    return DEFAULT_OUTPUT_FILE
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Export ranked jobs to a clean readable file."
+    )
+    parser.add_argument(
+        "--input",
+        default=DEFAULT_INPUT_FILE,
+        type=Path,
+        help=f"Ranked jobs JSON file. Default: {DEFAULT_INPUT_FILE}.",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        type=Path,
+        help=f"Output file. Default: {DEFAULT_OUTPUT_FILE}.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["html", "markdown"],
+        default="html",
+        help="Output format. Default: html.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional number of top jobs to include.",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=DEFAULT_MIN_SCORE,
+        help=(
+            "Minimum student fit score to include. "
+            f"Default: {DEFAULT_MIN_SCORE}. Use 0 to show all jobs."
+        ),
+    )
+    args = parser.parse_args()
+
+    jobs = load_jobs(args.input)
+    limit = parse_limit(args.limit)
+    min_score = parse_min_score(args.min_score)
+    output = infer_output_path(args.output, args.format)
+
+    if args.format == "markdown":
+        content = build_markdown_table(jobs, limit, min_score)
+    else:
+        content = build_html_cards(jobs, limit, min_score)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(content, encoding="utf-8")
+    print(f"Saved clean jobs {args.format} to {output}")
+
+
+if __name__ == "__main__":
+    main()
