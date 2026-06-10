@@ -1,2 +1,5 @@
 playwright>=1.40
 requests
+
+# Testing (used by `make test`)
+pytest>=7

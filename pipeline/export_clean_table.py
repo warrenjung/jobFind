@@ -9,6 +9,7 @@ import argparse
 import html
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -92,6 +93,32 @@ def format_distance(distance: Any) -> str:
         return f"{float(distance):.1f} miles"
     except (TypeError, ValueError):
         return clean_text(distance)
+
+
+def sortable_pay(job: dict[str, Any]) -> float:
+    """Numeric hourly pay for client-side sorting (0 when unknown)."""
+    try:
+        return float(job.get("hourly_pay_estimate"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def sortable_distance(job: dict[str, Any]) -> float:
+    """Numeric distance for client-side sorting (unknown sinks to the bottom)."""
+    try:
+        return float(job.get("distance_miles"))
+    except (TypeError, ValueError):
+        return 1_000_000.0
+
+
+def search_blob(job: dict[str, Any]) -> str:
+    """Lowercase title + employer + location for the client-side search box."""
+    parts = [
+        clean_text(job.get("title")),
+        clean_text(job.get("company")),
+        format_location(job),
+    ]
+    return " ".join(part for part in parts if part != NOT_SPECIFIED).lower()
 
 
 def load_jobs(filename: Path) -> list[dict[str, Any]]:
@@ -240,12 +267,22 @@ def format_html_apply_link(url: Any) -> str:
     return f'<a class="apply-link" href="{safe_url}" target="_blank" rel="noopener">Apply</a>'
 
 
-def summary_text(shown_count: int, min_score: Optional[float], location: Optional[str]) -> str:
+def summary_text(
+    shown_count: int,
+    min_score: Optional[float],
+    location: Optional[str],
+    fromage: Optional[int] = None,
+    generated_at: Optional[str] = None,
+) -> str:
     """Return a short summary for the clean output header."""
     where = f" near {location}" if location else ""
-    if min_score is None or min_score <= 0:
-        return f"{shown_count} jobs{where}, sorted by student fit score."
-    return f"{shown_count} jobs{where} rated {min_score:g}+ and sorted by student fit score."
+    rated = "" if (min_score is None or min_score <= 0) else f" rated {min_score:g}+"
+    parts = [f"{shown_count} jobs{where}{rated}, sorted by student fit score."]
+    if fromage and fromage > 0:
+        parts.append(f"Postings from the last {fromage} days.")
+    if generated_at:
+        parts.append(f"Generated {generated_at}.")
+    return " ".join(parts)
 
 
 def detail_row(label: str, value: str) -> str:
@@ -264,6 +301,8 @@ def build_html_cards(
     limit: Optional[int],
     min_score: Optional[float],
     location: Optional[str] = None,
+    fromage: Optional[int] = None,
+    generated_at: Optional[str] = None,
 ) -> str:
     """Build a browser-friendly HTML page with one card per job."""
     shown_jobs = prepared_jobs(jobs, limit, min_score)
@@ -290,7 +329,11 @@ def build_html_cards(
 
         cards.append(
             f"""
-      <article class="job-card">
+      <article class="job-card"
+        data-score="{job_score(job) or 0:g}"
+        data-pay="{sortable_pay(job):g}"
+        data-distance="{sortable_distance(job):g}"
+        data-text="{html.escape(search_blob(job), quote=True)}">
         <div class="card-topline">
           <span class="rank">#{index}</span>
           {source_badge}
@@ -307,6 +350,77 @@ def build_html_cards(
             '\n      <p class="empty">No jobs matched the current filters. '
             'Try lowering the minimum score (MIN_SCORE=0) or widening the search radius.</p>'
         )
+
+    generated_at = generated_at or datetime.now().strftime("%b %d, %Y %I:%M %p")
+    header_summary = html.escape(
+        summary_text(len(shown_jobs), min_score, location, fromage, generated_at),
+        quote=True,
+    )
+    header_title = html.escape(
+        f"Jobs near {location}" if location else "Job Results", quote=True
+    )
+
+    # Controls + script are plain strings (regular braces) injected into the
+    # f-string template, so no brace-escaping is needed for the JS below.
+    controls_html = (
+        ""
+        if not shown_jobs
+        else """
+    <section class="controls">
+      <input id="job-search" type="search" placeholder="Filter by title, employer, or city" aria-label="Filter jobs">
+      <select id="job-sort" aria-label="Sort jobs">
+        <option value="score">Sort: Best fit</option>
+        <option value="pay">Sort: Highest pay</option>
+        <option value="distance">Sort: Closest</option>
+      </select>
+      <span class="count" id="job-count"></span>
+    </section>"""
+    )
+    no_match_html = (
+        ""
+        if not shown_jobs
+        else '\n    <p class="no-match" id="no-match" hidden>No jobs match your search.</p>'
+    )
+    script_html = (
+        ""
+        if not shown_jobs
+        else """
+  <script>
+    (function () {
+      const search = document.getElementById('job-search');
+      const sortSelect = document.getElementById('job-sort');
+      const section = document.querySelector('.jobs');
+      const noMatch = document.getElementById('no-match');
+      const countEl = document.getElementById('job-count');
+      if (!section) return;
+      const cards = Array.from(section.querySelectorAll('.job-card'));
+      const num = (el, key) => parseFloat(el.getAttribute('data-' + key)) || 0;
+
+      function apply() {
+        const q = ((search && search.value) || '').trim().toLowerCase();
+        let visible = 0;
+        cards.forEach(card => {
+          const hit = !q || (card.getAttribute('data-text') || '').includes(q);
+          card.hidden = !hit;
+          if (hit) visible++;
+        });
+        const key = sortSelect ? sortSelect.value : 'score';
+        const ordered = cards.slice().sort((a, b) => {
+          if (key === 'distance') return num(a, 'distance') - num(b, 'distance');
+          if (key === 'pay') return num(b, 'pay') - num(a, 'pay');
+          return num(b, 'score') - num(a, 'score');
+        });
+        ordered.forEach(card => section.appendChild(card));
+        if (noMatch) noMatch.hidden = visible !== 0;
+        if (countEl) countEl.textContent = visible + ' shown';
+      }
+
+      if (search) search.addEventListener('input', apply);
+      if (sortSelect) sortSelect.addEventListener('change', apply);
+      apply();
+    })();
+  </script>"""
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -359,10 +473,43 @@ def build_html_cards(
       font-size: 15px;
     }}
 
+    .controls {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 16px 0 14px;
+    }}
+
+    .controls input, .controls select {{
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font: inherit;
+      color: var(--text);
+      background: #ffffff;
+    }}
+
+    .controls input {{ flex: 1 1 240px; }}
+
+    .controls .count {{
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+
     .jobs {{
       display: grid;
       gap: 14px;
     }}
+
+    .no-match {{
+      color: var(--muted);
+      padding: 16px;
+      text-align: center;
+    }}
+    .no-match[hidden] {{ display: none; }}
 
     .job-card {{
       background: var(--card);
@@ -478,13 +625,13 @@ def build_html_cards(
 <body>
   <main>
     <header>
-      <h1>{html.escape(f"Jobs near {location}" if location else "Job Results", quote=True)}</h1>
-      <p class="summary">{html.escape(summary_text(len(shown_jobs), min_score, location), quote=True)}</p>
-    </header>
+      <h1>{header_title}</h1>
+      <p class="summary">{header_summary}</p>
+    </header>{controls_html}
     <section class="jobs">
 {''.join(cards)}
-    </section>
-  </main>
+    </section>{no_match_html}
+  </main>{script_html}
 </body>
 </html>
 """
@@ -541,6 +688,12 @@ def main() -> None:
         default=None,
         help="Search location to show in the page header (e.g. 'Cupertino, CA').",
     )
+    parser.add_argument(
+        "--fromage",
+        type=int,
+        default=None,
+        help="Freshness window (days) to show in the page header.",
+    )
     args = parser.parse_args()
 
     jobs = load_jobs(args.input)
@@ -551,7 +704,7 @@ def main() -> None:
     if args.format == "markdown":
         content = build_markdown_table(jobs, limit, min_score)
     else:
-        content = build_html_cards(jobs, limit, min_score, args.location)
+        content = build_html_cards(jobs, limit, min_score, args.location, args.fromage)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8")

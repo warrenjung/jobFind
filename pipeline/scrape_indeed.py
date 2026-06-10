@@ -52,15 +52,27 @@ USER_AGENTS = [
 ]
 
 
-def make_search_url(query: str, location: str, radius: int, start: int) -> str:
-    return (
+def make_search_url(
+    query: str, location: str, radius: int, start: int, fromage: int = 14
+) -> str:
+    url = (
         f"https://www.indeed.com/jobs"
         f"?q={quote_plus(query)}"
         f"&l={quote_plus(location)}"
         f"&radius={radius}"
         f"&start={start}"
-        f"&fromage=14"
     )
+    # fromage limits to postings from the last N days; 0 means no limit.
+    if fromage and fromage > 0:
+        url += f"&fromage={fromage}"
+    return url
+
+
+def freshness_label(fromage: int) -> str:
+    """Human-readable freshness for a scraped listing (Indeed cards have no date)."""
+    if fromage and fromage > 0:
+        return f"Within last {fromage} days"
+    return NOT_SPECIFIED
 
 
 def parse_cards(page_text: str, location: str) -> list[dict]:
@@ -234,7 +246,54 @@ def dedupe_key(job_url: str, title: str, company: str, location: str) -> str:
     return "|".join(part.lower() for part in (title, company, location))
 
 
-def scrape_with_playwright(location: str, radius: int, pages: int, queries: list[str]) -> list[dict]:
+# Extracts one record per Indeed result card. Kept as a constant so the scraper
+# loop stays readable and the JS can be reused by the retry helper.
+CARD_EXTRACTION_JS = """
+() => {
+    const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+    const firstText = (el, selectors) => {
+        for (const selector of selectors) {
+            const found = el.querySelector(selector);
+            const text = clean(found ? (found.innerText || found.textContent || '') : '');
+            if (text) {
+                return text;
+            }
+        }
+        return '';
+    };
+    const cards = [];
+    document.querySelectorAll('.job_seen_beacon').forEach(el => {
+        const jkEl = el.querySelector('a[data-jk]');
+        const jk = jkEl ? jkEl.getAttribute('data-jk') : '';
+        const postedEl = el.querySelector('[data-testid="myJobsStateDate"], .date');
+        const attributes = Array.from(
+            el.querySelectorAll('[data-testid="attribute_snippet_testid"], .salary-snippet-container, .metadata.salary-snippet')
+        ).map(attr => clean(attr.innerText || attr.textContent || ''))
+         .filter(Boolean);
+
+        cards.push({
+            jk: jk,
+            title: firstText(el, ['span[title]', 'a.jcs-JobTitle span', 'a[data-jk]']),
+            company: firstText(el, ['[data-testid="company-name"]']),
+            location: firstText(el, ['[data-testid="text-location"]']),
+            attributes: Array.from(new Set(attributes)),
+            snippet: firstText(el, [
+                '[data-testid="belowJobSnippet"]',
+                '[data-testid="job-snippet"]',
+                '.job-snippet'
+            ]),
+            posted: clean(postedEl ? (postedEl.innerText || postedEl.textContent || '') : ''),
+            cardText: clean(el.innerText || el.textContent || ''),
+        });
+    });
+    return cards;
+}
+"""
+
+
+def scrape_with_playwright(
+    location: str, radius: int, pages: int, queries: list[str], fromage: int = 14
+) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     except ImportError:
@@ -258,68 +317,39 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
                 viewport={"width": 1280, "height": 900},
             )
 
+            def fetch_cards(target_url: str) -> tuple[list, str]:
+                """Navigate and extract cards; status is 'ok'/'timeout'/'challenge'."""
+                try:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
+                except PWTimeout:
+                    return [], "timeout"
+                time.sleep(random.uniform(1.5, 3.0))
+                content = page.content()
+                if "cf-challenge" in content or "unusual traffic" in content.lower():
+                    return [], "challenge"
+                return page.evaluate(CARD_EXTRACTION_JS), "ok"
+
             try:
                 page = context.new_page()
 
                 for page_num in range(pages):
                     start = page_num * 10
-                    url = make_search_url(query, location, radius, start)
-                    try:
-                        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                        time.sleep(random.uniform(1.5, 3.0))
-                    except PWTimeout:
-                        print(f"    Timeout on page {page_num + 1}, skipping")
-                        break
+                    url = make_search_url(query, location, radius, start, fromage)
+                    cards, status = fetch_cards(url)
 
-                    # Check for bot challenge
-                    content = page.content()
-                    if "cf-challenge" in content or "unusual traffic" in content.lower():
+                    # The soft block is intermittent: retry an empty/blocked first
+                    # page once after a longer back-off before giving up.
+                    if page_num == 0 and (status != "ok" or not cards):
+                        print(f"    First page empty ({status}); retrying once after backoff...")
+                        time.sleep(random.uniform(8.0, 12.0))
+                        cards, status = fetch_cards(url)
+
+                    if status == "timeout":
+                        print(f"    Timeout on page {page_num + 1}, skipping this query")
+                        break
+                    if status == "challenge":
                         print("    Bot challenge detected — skipping this query")
                         break
-
-                    # Extract job cards via DOM using .job_seen_beacon as container
-                    cards = page.evaluate("""
-                    () => {
-                        const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
-                        const firstText = (el, selectors) => {
-                            for (const selector of selectors) {
-                                const found = el.querySelector(selector);
-                                const text = clean(found ? (found.innerText || found.textContent || '') : '');
-                                if (text) {
-                                    return text;
-                                }
-                            }
-                            return '';
-                        };
-                        const cards = [];
-                        document.querySelectorAll('.job_seen_beacon').forEach(el => {
-                            const jkEl = el.querySelector('a[data-jk]');
-                            const jk = jkEl ? jkEl.getAttribute('data-jk') : '';
-                            const postedEl = el.querySelector('[data-testid="myJobsStateDate"], .date');
-                            const attributes = Array.from(
-                                el.querySelectorAll('[data-testid="attribute_snippet_testid"], .salary-snippet-container, .metadata.salary-snippet')
-                            ).map(attr => clean(attr.innerText || attr.textContent || ''))
-                             .filter(Boolean);
-
-                            cards.push({
-                                jk: jk,
-                                title: firstText(el, ['span[title]', 'a.jcs-JobTitle span', 'a[data-jk]']),
-                                company: firstText(el, ['[data-testid="company-name"]']),
-                                location: firstText(el, ['[data-testid="text-location"]']),
-                                attributes: Array.from(new Set(attributes)),
-                                snippet: firstText(el, [
-                                    '[data-testid="belowJobSnippet"]',
-                                    '[data-testid="job-snippet"]',
-                                    '.job-snippet'
-                                ]),
-                                posted: clean(postedEl ? (postedEl.innerText || postedEl.textContent || '') : ''),
-                                cardText: clean(el.innerText || el.textContent || ''),
-                            });
-                        });
-                        return cards;
-                    }
-                    """)
-
                     if not cards:
                         print(f"    No cards found on page {page_num + 1}, stopping this query")
                         break
@@ -351,6 +381,12 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
                                 schedule = sc.title()
                                 break
 
+                        # Indeed result cards no longer carry a posting date, so
+                        # fall back to the freshness window the search guarantees.
+                        posted = clean_text(c.get("posted"))
+                        if posted == NOT_SPECIFIED:
+                            posted = freshness_label(fromage)
+
                         all_jobs.append({
                             "title": title,
                             "company": company,
@@ -358,7 +394,7 @@ def scrape_with_playwright(location: str, radius: int, pages: int, queries: list
                             "pay": pay,
                             "job_type": job_type,
                             "schedule_hours": schedule,
-                            "date_posted": clean_text(c.get("posted")),
+                            "date_posted": posted,
                             "description_snippet": snippet[:300],
                             "job_url": job_url,
                             "search_query": query,
@@ -392,12 +428,18 @@ def main() -> None:
         default=None,
         help="Search queries (default: built-in teen-friendly list)",
     )
+    parser.add_argument(
+        "--fromage",
+        type=int,
+        default=14,
+        help="Only include postings from the last N days. Default: 14. Use 0 for no limit.",
+    )
     args = parser.parse_args()
 
     queries = args.queries or SEARCH_QUERIES
     print(f"Scraping Indeed: {args.location}, radius={args.radius}mi, {args.pages} pages × {len(queries)} queries")
 
-    jobs = scrape_with_playwright(args.location, args.radius, args.pages, queries)
+    jobs = scrape_with_playwright(args.location, args.radius, args.pages, queries, args.fromage)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

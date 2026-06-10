@@ -14,7 +14,6 @@ Pass --include-careeronestop to include CareerOneStop once Jobs API access works
 """
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -89,6 +88,7 @@ def scrape_indeed(
     radius: int,
     pages: int,
     queries: Optional[list[str]],
+    fromage: int,
 ) -> Path:
     """Run the Playwright-based Indeed scraper and return the output JSON path."""
     if not INDEED_SCRAPER.exists():
@@ -103,6 +103,8 @@ def scrape_indeed(
         str(radius),
         "--pages",
         str(pages),
+        "--fromage",
+        str(fromage),
         "--output",
         str(output_json),
     ]
@@ -266,9 +268,15 @@ def main() -> None:
         help=f"Number of USAJOBS results to fetch. Default: {DEFAULT_RESULTS}.",
     )
     parser.add_argument(
+        "--include-usajobs",
+        action="store_true",
+        help="Include USAJOBS results. Off by default — USAJOBS returns federal "
+        "career roles, not local teen jobs.",
+    )
+    parser.add_argument(
         "--skip-usajobs",
         action="store_true",
-        help="Use the existing USAJOBS JSON instead of refreshing it.",
+        help="Deprecated no-op (USAJOBS is already off unless --include-usajobs).",
     )
     parser.add_argument(
         "--skip-indeed",
@@ -303,6 +311,12 @@ def main() -> None:
         nargs="+",
         default=None,
         help="Optional Indeed search queries. Default: scraper's built-in list.",
+    )
+    parser.add_argument(
+        "--indeed-fromage",
+        type=int,
+        default=14,
+        help="Only include Indeed postings from the last N days. Default: 14. Use 0 for no limit.",
     )
     parser.add_argument(
         "--careeronestop-radius",
@@ -341,7 +355,7 @@ def main() -> None:
     location_slug = slugify_location(args.location)
     city_slug = city_slug_from_location(args.location)
 
-    if not args.skip_usajobs:
+    if args.include_usajobs:
         run_command(
             [
                 sys.executable,
@@ -354,8 +368,8 @@ def main() -> None:
                 args.usajobs_file,
             ]
         )
-    elif not os.path.exists(args.usajobs_file):
-        raise SystemExit(f"USAJOBS file does not exist: {args.usajobs_file}")
+    else:
+        print("\nSkipping USAJOBS by default (federal career roles). Use --include-usajobs to add them.")
 
     if args.skip_indeed:
         indeed_csv = find_existing_indeed_csv(location_slug, city_slug, args.indeed_file)
@@ -366,6 +380,7 @@ def main() -> None:
             args.indeed_radius,
             args.indeed_pages,
             args.indeed_queries,
+            args.indeed_fromage,
         )
         indeed_csv = ensure_indeed_csv(
             location_slug,
@@ -400,7 +415,7 @@ def main() -> None:
         "--home-location",
         args.location,
         "--usajobs-file",
-        args.usajobs_file,
+        args.usajobs_file if args.include_usajobs else "",
         "--indeed-file",
         str(indeed_csv),
         "--output",
@@ -427,6 +442,8 @@ def main() -> None:
             str(args.clean_min_score),
             "--location",
             args.location,
+            "--fromage",
+            str(args.indeed_fromage),
         ]
         if args.clean_limit is not None:
             clean_table_command.extend(["--limit", str(args.clean_limit)])

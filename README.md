@@ -1,9 +1,13 @@
 # Job Finder
 
-Find entry-level, teen-friendly summer jobs near any city. Pulls from
-**USAJOBS** and **Indeed** by default, with optional **CareerOneStop** support
-ready for when NLx jobs-data access is approved. It ranks everything by fit for
-an ~18-year-old with no degree, license, or certification.
+Find entry-level, teen-friendly summer jobs near any city. Scrapes **Indeed** by
+default, with optional **USAJOBS** and **CareerOneStop** sources. It ranks
+everything by fit for an ~18-year-old with no degree, license, or certification,
+then exports an interactive HTML page you can filter and sort.
+
+> **Note:** USAJOBS is **off by default** — it returns remote/nationwide federal
+> career roles (analyst, physician, etc.) that aren't realistic teen jobs. Add
+> `make run-with-usajobs` (or `--include-usajobs`) if you want them.
 
 ## How it works
 
@@ -88,14 +92,20 @@ make run-wide LOCATION="Cupertino, CA"
 # Fast smoke run with fewer Indeed queries/pages
 make run-fast LOCATION="Cupertino, CA"
 
+# Start a local browser app for searching without rerunning terminal commands
+make app
+
 # Re-rank only — reuse existing Indeed CSV, skip scraping
 make run-skip-indeed LOCATION="Cupertino, CA"
 
-# Re-scrape Indeed only — skip USAJOBS fetch
-make run-skip-usajobs LOCATION="Cupertino, CA"
+# Add USAJOBS federal results (off by default)
+make run-with-usajobs LOCATION="Cupertino, CA"
 
 # Include CareerOneStop after NLx Jobs API access is approved
 make run-with-careeronestop LOCATION="Cupertino, CA"
+
+# Run the unit tests
+make test
 
 # Rebuild the readable HTML cards from existing ranked jobs
 make table
@@ -115,19 +125,24 @@ make run              Run the full pipeline
 make run-wide         Same as run but with a 25-mile radius
 make run-fast         Faster smoke run with fewer Indeed queries/pages
 make run-skip-indeed  Re-rank using the existing Indeed CSV
-make run-skip-usajobs Re-scrape Indeed, skip USAJOBS
+make run-with-usajobs Run the pipeline and include USAJOBS federal results
 make run-with-careeronestop Include CareerOneStop API results once NLx access is approved
-make run-skip-careeronestop Run without CareerOneStop API results
 make table            Regenerate the readable HTML cards
+make app              Run the local browser search app
 make serve            Serve the HTML results over HTTP (port 8000)
+make test             Run the unit test suite
 make clean            Remove all generated output files
 make help             Show this message
 ```
 
 Override any default:
 ```bash
-make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 RESULTS=50 MIN_SCORE=60
+make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30
 ```
+
+`FROMAGE` controls the Indeed freshness window in days (default 14; use 0 for no
+limit). The generated HTML page lets you filter by title/employer/city and sort
+by best fit, highest pay, or closest — all client-side, no rerun needed.
 
 For targeted Indeed experiments, pass custom queries directly:
 ```bash
@@ -141,6 +156,25 @@ make run-with-careeronestop LOCATION="Seattle, WA" CAREER_RESULTS=50 CAREER_DAYS
 
 The readable HTML output hides obvious poor fits by default, only showing jobs
 with a score of 50 or higher. Use `MIN_SCORE=0` to show every ranked job.
+
+## Local browser app
+
+Run this once:
+
+```bash
+make app
+```
+
+Then open [http://localhost:8000](http://localhost:8000). The page lets you
+enter a location, choose a radius, pick Fast or Full mode, set a minimum score,
+and refresh the embedded results page from the browser.
+
+This app is local-only. The browser sends form values to the Python server on
+your machine, and the server runs the same pipeline commands documented above.
+API keys stay in gitignored credential files or environment variables and are
+not sent to the browser. A static public HTML file can show existing results,
+but it cannot safely run new API-backed searches for each visitor without a
+real backend.
 
 ## Output files
 

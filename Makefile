@@ -3,6 +3,7 @@ RADIUS   ?= 10
 PAGES    ?= 3
 RESULTS  ?= 25
 MIN_SCORE ?= 50
+FROMAGE  ?= 14
 CAREER_RESULTS ?= 25
 CAREER_DAYS ?= 30
 PORT     ?= 8000
@@ -23,7 +24,7 @@ run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, 
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
-		--num-usajobs-results $(RESULTS) \
+		--indeed-fromage $(FROMAGE) \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-wide
@@ -36,8 +37,8 @@ run-fast: ## Faster smoke run with fewer Indeed queries/pages
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages 1 \
+		--indeed-fromage $(FROMAGE) \
 		--indeed-queries cashier "retail associate" barista \
-		--num-usajobs-results 10 \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-skip-indeed
@@ -47,23 +48,15 @@ run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
 		--skip-indeed \
 		--clean-min-score $(MIN_SCORE)
 
-.PHONY: run-skip-usajobs
-run-skip-usajobs: ## Re-scrape Indeed only, skip USAJOBS fetch
+.PHONY: run-with-usajobs
+run-with-usajobs: ## Run the pipeline and include USAJOBS federal results
 	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
-		--skip-usajobs \
-		--clean-min-score $(MIN_SCORE)
-
-.PHONY: run-skip-careeronestop
-run-skip-careeronestop: ## Run without CareerOneStop API results
-	$(PYTHON) pipeline/run_job_pipeline.py \
-		--location "$(LOCATION)" \
-		--indeed-radius $(RADIUS) \
-		--indeed-pages $(PAGES) \
+		--indeed-fromage $(FROMAGE) \
+		--include-usajobs \
 		--num-usajobs-results $(RESULTS) \
-		--skip-careeronestop \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-with-careeronestop
@@ -72,7 +65,7 @@ run-with-careeronestop: ## Include CareerOneStop API results once NLx access is 
 		--location "$(LOCATION)" \
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
-		--num-usajobs-results $(RESULTS) \
+		--indeed-fromage $(FROMAGE) \
 		--include-careeronestop \
 		--careeronestop-results $(CAREER_RESULTS) \
 		--careeronestop-days $(CAREER_DAYS) \
@@ -84,10 +77,19 @@ run-with-careeronestop: ## Include CareerOneStop API results once NLx access is 
 table: ## Regenerate the clean HTML cards from existing ranked jobs
 	$(PYTHON) pipeline/export_clean_table.py --min-score $(MIN_SCORE) --location "$(LOCATION)"
 
+.PHONY: app
+app: ## Run the local browser search app (default port 8000; override with PORT=)
+	@echo "Open http://localhost:$(PORT)  (Ctrl+C to stop)"
+	$(PYTHON) pipeline/local_search_server.py --port $(PORT)
+
 .PHONY: serve
 serve: ## Serve the HTML results over HTTP (default port 8000; override with PORT=)
 	@echo "Open http://localhost:$(PORT)/jobs_clean.html  (Ctrl+C to stop)"
 	$(PYTHON) -m http.server $(PORT) --directory data
+
+.PHONY: test
+test: ## Run the unit test suite
+	$(PYTHON) -m pytest -q
 
 .PHONY: clean
 clean: ## Remove all generated output files (data/)

@@ -18,6 +18,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import re
 import sys
 from datetime import datetime
@@ -158,7 +159,14 @@ def parse_float(value: Any) -> Optional[float]:
 
 
 def load_usajobs(filename: str) -> list[dict[str, Any]]:
-    """Load and normalize USAJOBS records."""
+    """Load and normalize USAJOBS records when provided.
+
+    USAJOBS is opt-in, so a missing or empty path is normal — return no jobs
+    rather than failing the whole ranking step.
+    """
+    if not filename or not os.path.exists(filename):
+        return []
+
     with open(filename, "r", encoding="utf-8") as file:
         rows = json.load(file)
 
