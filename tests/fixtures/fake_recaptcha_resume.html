@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Upload or create a resume for this application</title>
+</head>
+<body>
+  <h1>Upload or create a resume for this application</h1>
+  <iframe
+    title="recaptcha"
+    src="https://www.recaptcha.net/recaptcha/enterprise/anchor?k=fake">
+  </iframe>
+  <button type="button">Build an Indeed Resume</button>
+  <button type="button" id="upload-resume" onclick="revealResume()">Upload a resume</button>
+  <div id="resume-slot"></div>
+  <input id="submitted" type="hidden" value="no">
+  <button type="button" onclick="document.getElementById('submitted').value = 'yes'">Submit application</button>
+  <script>
+    function revealResume() {
+      if (!document.getElementById('resume-file')) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.id = 'resume-file';
+        input.name = 'resume';
+        document.getElementById('resume-slot').appendChild(input);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Indeed Apply - Sensitive Step</title>
+  <style>
+    .step { display: none; }
+    .step.active { display: block; }
+  </style>
+</head>
+<body>
+  <section class="step active" id="step1">
+    <h2>Background questions</h2>
+    <label for="ssn">Social Security Number</label>
+    <input id="ssn" name="ssn" type="text">
+    <button type="button" class="continue">Continue</button>
+  </section>
+  <section class="step" id="step2">
+    <h2>Contact information</h2>
+    <label for="first_name">First name</label>
+    <input id="first_name" name="first_name" type="text">
+  </section>
+  <script>
+    document.querySelector('.continue').addEventListener('click', () => {
+      document.getElementById('step1').classList.remove('active');
+      document.getElementById('step2').classList.add('active');
+    });
+  </script>
+</body>
+</html>

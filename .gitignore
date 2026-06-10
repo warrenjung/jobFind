@@ -8,3 +8,5 @@ data/
 # Secrets
 usajobs_credentials.json
 careeronestop_credentials.json
+applicant_profile.json
+resumes/

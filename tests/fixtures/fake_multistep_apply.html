@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Indeed Apply - Multi-step</title>
+  <style>
+    .step { display: none; }
+    .step.active { display: block; }
+  </style>
+</head>
+<body>
+  <div id="progress">38%</div>
+
+  <!-- Step 1: contact info -->
+  <section class="step active" id="step1">
+    <h2>Add your contact information</h2>
+    <form>
+      <label for="first_name">First name</label>
+      <input id="first_name" name="first_name" type="text">
+      <label for="last_name">Last name</label>
+      <input id="last_name" name="last_name" type="text">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email">
+      <label for="phone">Mobile phone</label>
+      <input id="phone" name="phone" type="tel">
+    </form>
+    <button type="button" class="continue">Continue</button>
+  </section>
+
+  <!-- Step 2: resume (option cards; the file input is injected on demand) -->
+  <section class="step" id="step2">
+    <h2>Add a resume for the employer</h2>
+    <button type="button" id="build-resume">Build an Indeed Resume</button>
+    <button type="button" id="upload-resume" onclick="revealResume()">Upload a resume</button>
+    <div id="resume-slot"></div>
+    <button type="button" class="continue">Continue</button>
+  </section>
+
+  <!-- Step 3: review + final submit (must NOT be clicked) -->
+  <section class="step" id="step3">
+    <h2>Review your application</h2>
+    <input id="submitted" type="hidden" value="no">
+    <button type="button" id="submit-app"
+            onclick="document.getElementById('submitted').value = 'yes'">Submit application</button>
+  </section>
+
+  <script>
+    function revealResume() {
+      if (!document.getElementById('resume-file')) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.id = 'resume-file';
+        input.name = 'resume';
+        document.getElementById('resume-slot').appendChild(input);
+      }
+    }
+    let current = 1;
+    document.querySelectorAll('.continue').forEach(btn =>
+      btn.addEventListener('click', () => {
+        document.getElementById('step' + current).classList.remove('active');
+        current += 1;
+        document.getElementById('step' + current).classList.add('active');
+        document.getElementById('progress').textContent = (current * 30) + '%';
+      })
+    );
+  </script>
+</body>
+</html>

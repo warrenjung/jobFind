@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Indeed Apply</title>
+</head>
+<body>
+  <!-- Mimics Indeed's apply button, which lives inside an iframe on real pages. -->
+  <button id="indeedApplyButton" type="button"
+          onclick="document.getElementById('application').hidden = false">Apply now</button>
+
+  <section id="application" hidden aria-label="Application form">
+    <form id="application-form">
+      <label for="first_name">First name</label>
+      <input id="first_name" name="first_name" type="text">
+
+      <label for="last_name">Last name</label>
+      <input id="last_name" name="last_name" type="text">
+
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email">
+
+      <label for="phone">Mobile phone</label>
+      <input id="phone" name="phone" type="tel">
+
+      <label for="school">High school</label>
+      <input id="school" name="school" type="text">
+
+      <input id="submitted" name="submitted" type="hidden" value="no">
+      <button type="submit" onclick="document.getElementById('submitted').value = 'yes'">
+        Submit application
+      </button>
+    </form>
+  </section>
+</body>
+</html>

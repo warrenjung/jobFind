@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Indeed Apply - Role Buttons</title>
+  <style>
+    .step { display: none; }
+    .step.active { display: block; }
+    [role="button"] { border: 1px solid #333; padding: 8px; width: fit-content; }
+  </style>
+</head>
+<body>
+  <section class="step active" id="step1">
+    <h2>Contact information</h2>
+    <label for="first_name">First name</label>
+    <input id="first_name" name="first_name" type="text">
+    <div role="button" tabindex="0" id="next-role">Next</div>
+  </section>
+  <section class="step" id="step2">
+    <h2>Review your application</h2>
+    <input id="submitted" type="hidden" value="no">
+    <button type="button" onclick="document.getElementById('submitted').value = 'yes'">Submit application</button>
+  </section>
+  <script>
+    document.getElementById('next-role').addEventListener('click', () => {
+      document.getElementById('step1').classList.remove('active');
+      document.getElementById('step2').classList.add('active');
+    });
+  </script>
+</body>
+</html>

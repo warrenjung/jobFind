@@ -170,12 +170,45 @@ Then open [http://localhost:8000](http://localhost:8000). The page lets you
 enter a location, choose a radius, pick Fast or Full mode, set a minimum score,
 and refresh the embedded results page from the browser.
 
+The local app also includes an Apply Assistant for Indeed jobs. Click
+`Apply Assistant` on a job card to load it into the side panel, copy saved
+profile fields, and track whether the application is opened, autofilled, applied,
+skipped, or needs follow-up.
+
+**Autofill uses your real Google Chrome session.** This lets you log in manually
+and keep that local browser profile available for review-first autofill runs.
+The flow:
+
+1. Click `Open Indeed Login`. JobFind launches your installed Google Chrome with
+   remote debugging and a dedicated local profile, opened to the Indeed sign-in
+   page.
+2. Log in **manually** in that Chrome window.
+3. Return to JobFind, pick a job, and click `Autofill Application` (or
+   `Resume Autofill`). JobFind **attaches to that same Chrome over CDP**, opens
+   the job's application in a new tab, fills obvious fields from your profile,
+   uploads your resume when `resume_path` is set, clicks safe `Continue`/`Next`
+   buttons until something needs review, and then **stops** — it never submits.
+   You review and submit every application yourself.
+
+Requires Google Chrome installed (macOS/Windows/Linux). The login profile is
+saved locally under `data/browser_profiles/indeed/` so you don't have to sign in
+every time; your password is never stored or sent anywhere. If a site re-shows a
+CAPTCHA, verification, or login prompt on the application page, handle it
+manually in the open Chrome window and click `Resume Autofill`.
+
+Applicant info lives in `applicant_profile.json`, which is gitignored. Start
+from `applicant_profile.example.json`, then fill in only the fields you want
+available for local copy/paste/autofill. Application progress is saved under
+`data/applications_status.json`, which is also ignored.
+
 This app is local-only. The browser sends form values to the Python server on
 your machine, and the server runs the same pipeline commands documented above.
 API keys stay in gitignored credential files or environment variables and are
 not sent to the browser. A static public HTML file can show existing results,
 but it cannot safely run new API-backed searches for each visitor without a
-real backend.
+real backend. The Apply Assistant does not store passwords, bypass CAPTCHA or
+verification prompts, or submit applications automatically. It also leaves
+sensitive questions for review instead of guessing.
 
 ## Output files
 
@@ -186,6 +219,7 @@ All generated files are written to `data/` (created automatically, gitignored):
 | `data/jobs_clean.html` | Clean readable job cards rated 50+ with job, employer, description, pay, distance, score, and apply link |
 | `data/jobs_clean.md` | Optional raw Markdown table export |
 | `data/jobs_ranked.json` | Detailed ranked list from all sources |
+| `data/applications_status.json` | Local Apply Assistant progress tracker |
 | `data/jobs_raw.json` | Raw USAJOBS results |
 | `data/jobs_careeronestop_<city>.json` | Optional raw CareerOneStop API results |
 | `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |

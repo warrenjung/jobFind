@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cashier - Fake Job Detail</title>
+  <style>
+    #application { display: none; }
+    #application.open { display: block; }
+  </style>
+</head>
+<body>
+  <form id="job-search">
+    <label for="what">what: job title, keywords, or company</label>
+    <input id="what" name="q" type="text" placeholder="Job title, keywords, or company">
+
+    <label for="where">where: city, state, or zip code</label>
+    <input id="where" name="l" type="text" placeholder="City, state, zip code, or remote">
+  </form>
+
+  <main>
+    <h1>Cashier</h1>
+    <p>Fake job detail page used by tests.</p>
+    <button id="apply-now" type="button" onclick="document.getElementById('application').className='open'">Apply now</button>
+  </main>
+
+  <section id="application" aria-label="Application form">
+    <form id="application-form">
+      <label for="first_name">First name</label>
+      <input id="first_name" name="first_name" type="text">
+
+      <label for="last_name">Last name</label>
+      <input id="last_name" name="last_name" type="text">
+
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email">
+
+      <label for="intro">Why are you interested in this job?</label>
+      <textarea id="intro" name="intro"></textarea>
+
+      <input id="submitted" name="submitted" type="hidden" value="no">
+      <button type="submit" onclick="document.getElementById('submitted').value='yes'">Submit application</button>
+    </form>
+  </section>
+</body>
+</html>

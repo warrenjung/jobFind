@@ -329,6 +329,27 @@ def format_html_apply_link(url: Any) -> str:
     return f'<a class="apply-link" href="{safe_url}" target="_blank" rel="noopener">Apply</a>'
 
 
+def format_apply_assistant_button(job: dict[str, Any]) -> str:
+    """Return an Apply Assistant button for supported job sources."""
+    url = clean_text(job.get("url"))
+    if source_filter_value(job) != "indeed":
+        return ""
+    if url == NOT_SPECIFIED or not url.startswith(("http://", "https://")):
+        return ""
+    attrs = {
+        "url": url,
+        "title": clean_text(job.get("title")),
+        "company": clean_text(job.get("company")),
+        "source": format_source(job),
+        "score": clean_text(job.get("student_fit_score")),
+    }
+    data_attrs = " ".join(
+        f'data-{key}="{html.escape(value, quote=True)}"'
+        for key, value in attrs.items()
+    )
+    return f'<button class="assistant-button" type="button" {data_attrs}>Apply Assistant</button>'
+
+
 def summary_text(
     shown_count: int,
     min_score: Optional[float],
@@ -373,6 +394,7 @@ def build_html_cards(
     for index, job in enumerate(shown_jobs, start=1):
         title = html_text(job.get("title"))
         source = html_text(format_source(job))
+        assistant_button = format_apply_assistant_button(job)
         rows = "".join(
             [
                 detail_row("Employer", html_text(job.get("company"))),
@@ -408,6 +430,7 @@ def build_html_cards(
         <h2>{title}</h2>
         <dl>{rows}
         </dl>
+        <div class="card-actions">{assistant_button}</div>
       </article>"""
         )
 
@@ -499,6 +522,7 @@ def build_html_cards(
       const countEl = document.getElementById('job-count');
       if (!section) return;
       const cards = Array.from(section.querySelectorAll('.job-card'));
+      const assistantButtons = Array.from(document.querySelectorAll('.assistant-button'));
       const num = (el, key) => parseFloat(el.getAttribute('data-' + key)) || 0;
       const hasValue = (el, key) => el.getAttribute('data-' + key + '-known') === '1';
 
@@ -540,6 +564,22 @@ def build_html_cards(
       if (jobSource) jobSource.addEventListener('change', apply);
       if (maxDistance) maxDistance.addEventListener('change', apply);
       if (sortSelect) sortSelect.addEventListener('change', apply);
+      assistantButtons.forEach(button => {
+        button.addEventListener('click', () => {
+          const job = {
+            url: button.dataset.url || '',
+            title: button.dataset.title || '',
+            company: button.dataset.company || '',
+            source: button.dataset.source || '',
+            score: button.dataset.score || ''
+          };
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'jobfind:apply-assistant', job }, window.location.origin);
+          } else if (job.url) {
+            window.open(job.url, '_blank', 'noopener');
+          }
+        });
+      });
       apply();
     })();
   </script>"""
@@ -554,13 +594,17 @@ def build_html_cards(
   <style>
     :root {{
       color-scheme: light;
-      --bg: #f6f7f9;
+      --bg: #eef3f4;
       --card: #ffffff;
-      --text: #17202a;
-      --muted: #5e6b78;
-      --line: #d9dee5;
-      --accent: #0f6b5f;
-      --accent-strong: #0a4f46;
+      --card-soft: #f7faf9;
+      --text: #16211f;
+      --muted: #64716f;
+      --line: #d8e0df;
+      --line-strong: #c6d0ce;
+      --accent: #126b62;
+      --accent-strong: #0b4f49;
+      --accent-soft: #e8f3f1;
+      --shadow: 0 10px 24px rgba(24, 38, 36, 0.08);
     }}
 
     * {{
@@ -569,25 +613,28 @@ def build_html_cards(
 
     body {{
       margin: 0;
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, #f7faf9 0, var(--bg) 310px);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.45;
     }}
 
     main {{
-      width: min(1080px, calc(100% - 32px));
-      margin: 32px auto 48px;
+      width: min(1080px, calc(100% - 28px));
+      margin: 24px auto 42px;
     }}
 
     header {{
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }}
 
     h1 {{
       margin: 0 0 6px;
-      font-size: 28px;
+      font-size: clamp(24px, 3vw, 32px);
       font-weight: 700;
+      line-height: 1.12;
+      letter-spacing: 0;
     }}
 
     .summary {{
@@ -601,39 +648,58 @@ def build_html_cards(
       grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(120px, 0.7fr)) auto;
       gap: 10px;
       align-items: end;
-      margin: 16px 0 14px;
+      margin: 16px 0 16px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      box-shadow: 0 4px 14px rgba(24, 38, 36, 0.06);
     }}
 
     .controls label {{
       display: grid;
       gap: 5px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
+      letter-spacing: 0;
     }}
 
     .controls input, .controls select {{
-      min-height: 38px;
+      min-height: 40px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      padding: 7px 10px;
+      padding: 8px 10px;
       font: inherit;
       color: var(--text);
       background: #ffffff;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }}
+
+    .controls input:focus, .controls select:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(18, 107, 98, 0.14);
     }}
 
     .controls .count {{
-      color: var(--muted);
-      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
       white-space: nowrap;
-      padding-bottom: 9px;
     }}
 
     .jobs {{
       display: grid;
-      gap: 14px;
+      gap: 12px;
     }}
 
     .no-match {{
@@ -647,21 +713,38 @@ def build_html_cards(
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 18px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      padding: 16px;
+      box-shadow: var(--shadow);
     }}
 
     .card-topline {{
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 8px;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
       color: var(--muted);
       font-size: 13px;
     }}
 
+    .rank {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef2f1;
+      color: var(--text);
+      font-weight: 700;
+    }}
+
     .score {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
       color: var(--accent-strong);
       font-weight: 700;
       margin-left: auto;
@@ -669,14 +752,14 @@ def build_html_cards(
 
     .source {{
       display: inline-block;
-      padding: 2px 8px;
+      padding: 3px 8px;
       border-radius: 999px;
-      background: var(--line);
+      background: #eef2f1;
       color: var(--muted);
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
     }}
 
     .empty {{
@@ -690,30 +773,41 @@ def build_html_cards(
 
     h2 {{
       margin: 0 0 14px;
-      font-size: 20px;
+      font-size: 19px;
       line-height: 1.25;
+      letter-spacing: 0;
     }}
 
     dl {{
       display: grid;
-      gap: 10px;
+      gap: 8px;
       margin: 0;
     }}
 
     dl > div {{
       display: grid;
-      grid-template-columns: 150px minmax(0, 1fr);
-      gap: 14px;
-      padding-top: 10px;
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 12px;
+      padding-top: 8px;
       border-top: 1px solid var(--line);
+    }}
+
+    .card-actions {{
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 14px;
+    }}
+
+    .card-actions:empty {{
+      display: none;
     }}
 
     dt {{
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
+      letter-spacing: 0;
     }}
 
     dd {{
@@ -725,16 +819,37 @@ def build_html_cards(
       display: inline-flex;
       align-items: center;
       min-height: 34px;
-      padding: 6px 12px;
+      padding: 7px 13px;
       border-radius: 6px;
       background: var(--accent);
       color: #ffffff;
       font-weight: 700;
       text-decoration: none;
+      transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
     }}
 
     .apply-link:hover {{
       background: var(--accent-strong);
+      box-shadow: 0 6px 14px rgba(18, 107, 98, 0.18);
+      transform: translateY(-1px);
+    }}
+
+    .assistant-button {{
+      min-height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      padding: 7px 13px;
+      background: #f4f8f7;
+      color: var(--accent-strong);
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }}
+
+    .assistant-button:hover {{
+      border-color: var(--accent);
+      background: var(--accent-soft);
     }}
 
     .missing {{
@@ -757,7 +872,8 @@ def build_html_cards(
       }}
 
       .controls .count {{
-        padding-bottom: 0;
+        justify-content: flex-start;
+        width: fit-content;
       }}
     }}
   </style>

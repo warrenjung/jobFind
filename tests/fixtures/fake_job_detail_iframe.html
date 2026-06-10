@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cashier - Fake Indeed Job</title>
+</head>
+<body>
+  <!-- Job-search box that must be ignored (mirrors Indeed's what/where). -->
+  <form id="job-search">
+    <label for="what">what: job title, keywords, or company</label>
+    <input id="what" name="q" type="text" placeholder="Job title, keywords, or company">
+
+    <label for="where">where: city, state, or zip code</label>
+    <input id="where" name="l" type="text" placeholder="City, state, zip code, or remote">
+  </form>
+
+  <main>
+    <h1>Cashier</h1>
+    <p>Fake Indeed-style job page; the Apply button lives in an iframe.</p>
+    <iframe id="indeedApplyButtonContainer" title="Indeed Apply"
+            src="fake_apply_widget.html" width="420" height="360"></iframe>
+  </main>
+</body>
+</html>

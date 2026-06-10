@@ -1,0 +1,26 @@
+{
+  "name": "Student Name",
+  "first_name": "Student",
+  "last_name": "Name",
+  "preferred_name": "Student",
+  "email": "student@example.com",
+  "phone": "555-0100",
+  "city": "Cupertino",
+  "state": "CA",
+  "school": "Example High School",
+  "graduation_year": "2027",
+  "education_level": "High school",
+  "availability": "Weekdays after 3 PM and weekends",
+  "available_start_date": "June 15, 2026",
+  "desired_hours": "15-20 hours per week",
+  "age_or_work_permit": "I meet the age requirements for part-time work and can provide a work permit if needed.",
+  "work_eligibility": "Authorized to work in the United States",
+  "resume_path": "/path/to/resume.pdf",
+  "short_intro": "I am a responsible high school student looking for a part-time summer job where I can learn, help customers, and be dependable.",
+  "custom_answers": {
+    "Do you have reliable transportation?": "Yes, I have reliable transportation.",
+    "Are you available weekends?": "Yes, I am available on weekends.",
+    "Why are you interested in this job?": "I want to gain work experience, help customers, and be a dependable member of the team.",
+    "How many hours per week can you work?": "15-20 hours per week"
+  }
+}
