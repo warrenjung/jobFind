@@ -274,11 +274,6 @@ def main() -> None:
         "career roles, not local teen jobs.",
     )
     parser.add_argument(
-        "--skip-usajobs",
-        action="store_true",
-        help="Deprecated no-op (USAJOBS is already off unless --include-usajobs).",
-    )
-    parser.add_argument(
         "--skip-indeed",
         action="store_true",
         help="Skip Indeed scraping and use an existing Indeed CSV.",

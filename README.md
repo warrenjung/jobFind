@@ -12,19 +12,19 @@ then exports an interactive HTML page you can filter and sort.
 ## How it works
 
 ```
-USAJOBS API ────────────────────────────────┐
-Indeed (Playwright headless browser) ───────┼─► rank_jobs.py ──► jobs_ranked.json
+Indeed (Playwright headless browser) ───────┐
+USAJOBS API (optional) ──────────────────────┼─► rank_jobs.py ──► jobs_ranked.json
 CareerOneStop Jobs V2 API (optional) ───────┘                      ▼
   └─ scrape_indeed.py                                      jobs_clean.html
   └─ pipeline/build_csv.py (filter)
 ```
 
-1. `usajobs_summer_scraper.py` — fetches temporary/seasonal roles from USAJOBS
-2. `careeronestop_scraper.py` — fetches optional local listings from CareerOneStop Jobs V2
-3. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser
-4. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
+1. `scrape_indeed.py` — scrapes Indeed with a headless Chromium browser (default source)
+2. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
+3. `usajobs_summer_scraper.py` — fetches federal roles from USAJOBS (optional, `--include-usajobs`)
+4. `careeronestop_scraper.py` — fetches local listings from CareerOneStop Jobs V2 (optional)
 5. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
-6. `export_clean_table.py` — exports easy-to-read HTML job cards
+6. `export_clean_table.py` — exports the interactive HTML page
 7. `run_job_pipeline.py` — orchestrates all of the above in one command
 
 ## Setup
@@ -141,8 +141,9 @@ make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30
 ```
 
 `FROMAGE` controls the Indeed freshness window in days (default 14; use 0 for no
-limit). The generated HTML page lets you filter by title/employer/city and sort
-by best fit, highest pay, or closest — all client-side, no rerun needed.
+limit). The generated HTML page lets you filter by title/employer/city, minimum
+pay, job type, source, and distance, then sort by best fit, highest pay, or
+closest — all client-side, no rerun needed.
 
 For targeted Indeed experiments, pass custom queries directly:
 ```bash

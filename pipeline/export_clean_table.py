@@ -85,6 +85,32 @@ def format_source(job: dict[str, Any]) -> str:
     return NOT_SPECIFIED
 
 
+def source_filter_value(job: dict[str, Any]) -> str:
+    """Stable source value for client-side filters."""
+    source = format_source(job)
+    if source == NOT_SPECIFIED:
+        return "not-specified"
+    return source.lower()
+
+
+def job_type_filter_value(job: dict[str, Any]) -> str:
+    """Bucket job type into the simple filter choices shown in the UI."""
+    job_type = clean_text(job.get("job_type")).lower()
+    if job_type == NOT_SPECIFIED.lower():
+        return "not-specified"
+    if "part" in job_type:
+        return "part-time"
+    if "full" in job_type:
+        return "full-time"
+    if "temp" in job_type or "seasonal" in job_type:
+        return "temporary"
+    if "contract" in job_type:
+        return "contract"
+    if "intern" in job_type:
+        return "internship"
+    return "not-specified"
+
+
 def format_distance(distance: Any) -> str:
     """Format miles from the search location for display."""
     if distance is None:
@@ -103,12 +129,30 @@ def sortable_pay(job: dict[str, Any]) -> float:
         return 0.0
 
 
+def has_sortable_pay(job: dict[str, Any]) -> bool:
+    """Whether the ranked job has a usable hourly pay estimate."""
+    try:
+        float(job.get("hourly_pay_estimate"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def sortable_distance(job: dict[str, Any]) -> float:
     """Numeric distance for client-side sorting (unknown sinks to the bottom)."""
     try:
         return float(job.get("distance_miles"))
     except (TypeError, ValueError):
         return 1_000_000.0
+
+
+def has_sortable_distance(job: dict[str, Any]) -> bool:
+    """Whether the ranked job has a usable distance value."""
+    try:
+        float(job.get("distance_miles"))
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def search_blob(job: dict[str, Any]) -> str:
@@ -119,6 +163,24 @@ def search_blob(job: dict[str, Any]) -> str:
         format_location(job),
     ]
     return " ".join(part for part in parts if part != NOT_SPECIFIED).lower()
+
+
+def source_filter_options(jobs: list[dict[str, Any]]) -> str:
+    """Build source filter options from the sources present in the visible jobs."""
+    labels = {
+        "indeed": "Indeed",
+        "usajobs": "USAJOBS",
+        "careeronestop": "CareerOneStop",
+        "not-specified": "Not specified",
+    }
+    preferred_order = ["indeed", "usajobs", "careeronestop", "not-specified"]
+    present = {source_filter_value(job) for job in jobs}
+    ordered = [value for value in preferred_order if value in present]
+    ordered.extend(sorted(present - set(ordered)))
+    return "\n".join(
+        f'<option value="{html.escape(value, quote=True)}">{html.escape(labels.get(value, value.title()), quote=True)}</option>'
+        for value in ordered
+    )
 
 
 def load_jobs(filename: Path) -> list[dict[str, Any]]:
@@ -332,7 +394,11 @@ def build_html_cards(
       <article class="job-card"
         data-score="{job_score(job) or 0:g}"
         data-pay="{sortable_pay(job):g}"
+        data-pay-known="{"1" if has_sortable_pay(job) else "0"}"
         data-distance="{sortable_distance(job):g}"
+        data-distance-known="{"1" if has_sortable_distance(job) else "0"}"
+        data-job-type="{html.escape(job_type_filter_value(job), quote=True)}"
+        data-source="{html.escape(source_filter_value(job), quote=True)}"
         data-text="{html.escape(search_blob(job), quote=True)}">
         <div class="card-topline">
           <span class="rank">#{index}</span>
@@ -365,21 +431,56 @@ def build_html_cards(
     controls_html = (
         ""
         if not shown_jobs
-        else """
+        else f"""
     <section class="controls">
-      <input id="job-search" type="search" placeholder="Filter by title, employer, or city" aria-label="Filter jobs">
-      <select id="job-sort" aria-label="Sort jobs">
-        <option value="score">Sort: Best fit</option>
-        <option value="pay">Sort: Highest pay</option>
-        <option value="distance">Sort: Closest</option>
-      </select>
+      <label>Search
+        <input id="job-search" type="search" placeholder="Title, employer, or city">
+      </label>
+      <label>Min pay
+        <input id="min-pay" type="number" min="0" step="0.5" placeholder="$ / hour">
+      </label>
+      <label>Type
+        <select id="job-type">
+          <option value="">Any type</option>
+          <option value="part-time">Part-time</option>
+          <option value="full-time">Full-time</option>
+          <option value="temporary">Temporary</option>
+          <option value="contract">Contract</option>
+          <option value="internship">Internship</option>
+          <option value="not-specified">Not specified</option>
+        </select>
+      </label>
+      <label>Source
+        <select id="job-source">
+          <option value="">Any source</option>
+          {source_filter_options(shown_jobs)}
+        </select>
+      </label>
+      <label>Max distance
+        <select id="max-distance">
+          <option value="">Any distance</option>
+          <option value="5">5 miles</option>
+          <option value="10">10 miles</option>
+          <option value="15">15 miles</option>
+          <option value="25">25 miles</option>
+          <option value="35">35 miles</option>
+          <option value="50">50 miles</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="job-sort">
+          <option value="score">Best fit</option>
+          <option value="pay">Highest pay</option>
+          <option value="distance">Closest</option>
+        </select>
+      </label>
       <span class="count" id="job-count"></span>
     </section>"""
     )
     no_match_html = (
         ""
         if not shown_jobs
-        else '\n    <p class="no-match" id="no-match" hidden>No jobs match your search.</p>'
+        else '\n    <p class="no-match" id="no-match" hidden>No jobs match these filters.</p>'
     )
     script_html = (
         ""
@@ -388,6 +489,10 @@ def build_html_cards(
   <script>
     (function () {
       const search = document.getElementById('job-search');
+      const minPay = document.getElementById('min-pay');
+      const jobType = document.getElementById('job-type');
+      const jobSource = document.getElementById('job-source');
+      const maxDistance = document.getElementById('max-distance');
       const sortSelect = document.getElementById('job-sort');
       const section = document.querySelector('.jobs');
       const noMatch = document.getElementById('no-match');
@@ -395,12 +500,26 @@ def build_html_cards(
       if (!section) return;
       const cards = Array.from(section.querySelectorAll('.job-card'));
       const num = (el, key) => parseFloat(el.getAttribute('data-' + key)) || 0;
+      const hasValue = (el, key) => el.getAttribute('data-' + key + '-known') === '1';
 
       function apply() {
         const q = ((search && search.value) || '').trim().toLowerCase();
+        const payValue = parseFloat((minPay && minPay.value) || '');
+        const payFilterOn = Number.isFinite(payValue) && payValue > 0;
+        const distanceValue = parseFloat((maxDistance && maxDistance.value) || '');
+        const distanceFilterOn = Number.isFinite(distanceValue);
+        const typeValue = (jobType && jobType.value) || '';
+        const sourceValue = (jobSource && jobSource.value) || '';
         let visible = 0;
         cards.forEach(card => {
-          const hit = !q || (card.getAttribute('data-text') || '').includes(q);
+          const textHit = !q || (card.getAttribute('data-text') || '').includes(q);
+          const payHit = !payFilterOn || (hasValue(card, 'pay') && num(card, 'pay') >= payValue);
+          const typeHit = !typeValue || card.getAttribute('data-job-type') === typeValue;
+          const sourceHit = !sourceValue || card.getAttribute('data-source') === sourceValue;
+          const distanceHit = !distanceFilterOn || (
+            hasValue(card, 'distance') && num(card, 'distance') <= distanceValue
+          );
+          const hit = textHit && payHit && typeHit && sourceHit && distanceHit;
           card.hidden = !hit;
           if (hit) visible++;
         });
@@ -416,6 +535,10 @@ def build_html_cards(
       }
 
       if (search) search.addEventListener('input', apply);
+      if (minPay) minPay.addEventListener('input', apply);
+      if (jobType) jobType.addEventListener('change', apply);
+      if (jobSource) jobSource.addEventListener('change', apply);
+      if (maxDistance) maxDistance.addEventListener('change', apply);
       if (sortSelect) sortSelect.addEventListener('change', apply);
       apply();
     })();
@@ -474,11 +597,21 @@ def build_html_cards(
     }}
 
     .controls {{
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(120px, 0.7fr)) auto;
       gap: 10px;
-      align-items: center;
+      align-items: end;
       margin: 16px 0 14px;
+    }}
+
+    .controls label {{
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }}
 
     .controls input, .controls select {{
@@ -491,12 +624,11 @@ def build_html_cards(
       background: #ffffff;
     }}
 
-    .controls input {{ flex: 1 1 240px; }}
-
     .controls .count {{
-      margin-left: auto;
       color: var(--muted);
       font-size: 13px;
+      white-space: nowrap;
+      padding-bottom: 9px;
     }}
 
     .jobs {{
@@ -618,6 +750,14 @@ def build_html_cards(
       dl > div {{
         grid-template-columns: 1fr;
         gap: 4px;
+      }}
+
+      .controls {{
+        grid-template-columns: 1fr;
+      }}
+
+      .controls .count {{
+        padding-bottom: 0;
       }}
     }}
   </style>
