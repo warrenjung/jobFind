@@ -6,8 +6,8 @@ existing pipeline without exposing API keys to the page.
 """
 
 import argparse
-import html
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -19,10 +19,12 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 import application_autofill
+import requests
 
 
 REPO_ROOT = Path(__file__).parent.parent
 DATA_DIR = REPO_ROOT / "data"
+STATIC_DIR = Path(__file__).parent / "app_static"
 PIPELINE_SCRIPT = REPO_ROOT / "pipeline" / "run_job_pipeline.py"
 RESULTS_FILE = DATA_DIR / "jobs_clean.html"
 PROFILE_FILE = REPO_ROOT / "applicant_profile.json"
@@ -37,6 +39,16 @@ DEFAULT_MODE = "fast"
 DEFAULT_MIN_SCORE = "50"
 
 RADIUS_CHOICES = {"5", "10", "15", "25", "35", "50"}
+RADIUS_ORDER = ["5", "10", "15", "25", "35", "50"]
+
+# Static frontend files served from disk, with their content types. Allowlisted
+# (no path traversal) — only these exact names are served.
+STATIC_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+}
 MODE_CHOICES = {"fast", "full"}
 FAST_QUERIES = ["cashier", "retail associate", "barista"]
 MAX_LOG_LINES = 240
@@ -72,6 +84,57 @@ PROFILE_EDIT_FIELDS = [
     "resume_path",
     "short_intro",
 ]
+PROFILE_REQUIRED_LABELS = {
+    "name": "name",
+    "email": "email",
+    "phone": "phone",
+    "city": "city",
+    "state": "state",
+    "availability": "availability",
+}
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEFAULT_OPENAI_MODEL = "gpt-5.1-mini"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
+OLLAMA_SETUP_MESSAGE = (
+    "AI polish is optional. For the free local option, install Ollama, run "
+    "`ollama pull llama3.2:3b`, start Ollama, then try again."
+)
+COMMON_ANSWER_FIELDS = [
+    ("ideal_job", "Ideal job", "What does your ideal job look like?"),
+    ("availability", "Availability", "When are you available to work?"),
+    ("transportation", "Transportation", "Do you have reliable transportation?"),
+    ("why_this_company", "Why this company", "Why do you want to work here?"),
+    ("customer_service", "Customer service", "Tell us about your customer service experience."),
+    ("teamwork", "Teamwork", "Tell us about a time you worked on a team."),
+    ("extra_notes", "Extra notes", "Anything else an employer should know?"),
+]
+COMMON_ANSWER_ALIASES = {
+    "ideal_job": (
+        "What are 3 things you'd look for in an ideal job?",
+        "What are you looking for in a job?",
+    ),
+    "availability": (
+        "Are you available weekends?",
+        "How many hours per week can you work?",
+    ),
+    "transportation": (
+        "Do you have reliable transportation?",
+    ),
+    "why_this_company": (
+        "Why are you interested in this job?",
+        "Why are you interested in this company?",
+    ),
+    "customer_service": (
+        "Tell us about your customer service experience.",
+    ),
+    "teamwork": (
+        "Tell us about a time you worked on a team.",
+    ),
+    "extra_notes": (
+        "Anything else an employer should know?",
+    ),
+}
 
 
 class RunState:
@@ -332,6 +395,77 @@ def load_applicant_profile() -> dict[str, Any]:
     return profile if isinstance(profile, dict) else {}
 
 
+def profile_missing_fields(profile: dict[str, Any]) -> list[str]:
+    """Return friendly names for required profile fields that are missing."""
+    missing = []
+    first = clean_payload_text(profile.get("first_name"))
+    last = clean_payload_text(profile.get("last_name"))
+    full_name = clean_payload_text(profile.get("name"))
+    if not full_name and not (first and last):
+        missing.append(PROFILE_REQUIRED_LABELS["name"])
+    for key in ("email", "phone", "city", "state", "availability"):
+        if not clean_payload_text(profile.get(key)):
+            missing.append(PROFILE_REQUIRED_LABELS[key])
+    return missing
+
+
+def build_setup_status() -> dict[str, Any]:
+    """Return local-only setup readiness for the browser checklist."""
+    profile = load_applicant_profile()
+    profile_exists = PROFILE_FILE.exists()
+    missing_fields = profile_missing_fields(profile)
+    resume_issue = application_autofill.resume_path_issue(profile)
+    indeed_ready = latest_login_port() is not None
+    results_ready = RESULTS_FILE.exists()
+
+    profile_ready = profile_exists and not missing_fields
+    resume_ready = resume_issue is None
+    checks = {
+        "profile": {
+            "ready": profile_ready,
+            "label": "Profile info",
+            "message": (
+                "Profile basics are ready."
+                if profile_ready
+                else "Add " + ", ".join(missing_fields or ["profile info"]) + "."
+            ),
+            "action": "Edit profile",
+        },
+        "resume": {
+            "ready": resume_ready,
+            "label": "Resume file",
+            "message": "Resume path is ready." if resume_ready else resume_issue,
+            "action": "Fix resume path",
+        },
+        "indeed_login": {
+            "ready": indeed_ready,
+            "label": "Indeed login",
+            "message": (
+                "Chrome login session is ready."
+                if indeed_ready
+                else SESSION_RECOVERY_MESSAGE
+                or "Open Indeed Login when you want assisted applications."
+            ),
+            "action": "Open Indeed Login",
+        },
+        "results": {
+            "ready": results_ready,
+            "label": "Job results",
+            "message": (
+                "Latest results page is available."
+                if results_ready
+                else "Run a search to generate job results."
+            ),
+            "action": "Search jobs",
+        },
+    }
+    return {
+        "all_ready": all(check["ready"] for check in checks.values()),
+        "profile_exists": profile_exists,
+        "checks": checks,
+    }
+
+
 def save_applicant_profile_updates(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Save friendly profile fields while preserving advanced local data."""
     profile = load_applicant_profile()
@@ -345,6 +479,267 @@ def save_applicant_profile_updates(payload: dict[str, Any]) -> tuple[dict[str, A
     if resume_issue:
         warnings.append(resume_issue)
     return profile, warnings
+
+
+def common_answer_field_map() -> dict[str, dict[str, str]]:
+    """Return metadata for editable common answers."""
+    return {
+        key: {"key": key, "label": label, "prompt": prompt}
+        for key, label, prompt in COMMON_ANSWER_FIELDS
+    }
+
+
+def common_answers_from_profile(profile: dict[str, Any]) -> dict[str, str]:
+    """Return common answers from the profile's advanced custom_answers map."""
+    raw_answers = profile.get("custom_answers", {})
+    answers = raw_answers if isinstance(raw_answers, dict) else {}
+    result: dict[str, str] = {}
+    field_map = common_answer_field_map()
+    for key in field_map:
+        prompts = (field_map[key]["prompt"], *COMMON_ANSWER_ALIASES.get(key, ()))
+        result[key] = ""
+        for prompt in prompts:
+            value = clean_payload_text(answers.get(prompt), 5000)
+            if value:
+                result[key] = value
+                break
+    if not result.get("availability"):
+        result["availability"] = clean_payload_text(profile.get("availability"), 5000)
+    return result
+
+
+def common_answers_payload(payload: dict[str, Any]) -> tuple[dict[str, str], Optional[str]]:
+    """Normalize a common-answer save payload."""
+    raw_answers = payload.get("answers", payload)
+    if not isinstance(raw_answers, dict):
+        return {}, "answers must be a JSON object."
+    allowed = common_answer_field_map()
+    result = {}
+    for key in allowed:
+        if key in raw_answers:
+            result[key] = clean_payload_text(raw_answers.get(key), 5000)
+    return result, None
+
+
+def save_common_answers_updates(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], Optional[str]]:
+    """Save common answers while preserving other custom answers."""
+    updates, error = common_answers_payload(payload)
+    if error:
+        return {}, {}, error
+    profile = load_applicant_profile()
+    existing = profile.get("custom_answers", {})
+    custom = dict(existing) if isinstance(existing, dict) else {}
+    field_map = common_answer_field_map()
+    for key, value in updates.items():
+        prompt = field_map[key]["prompt"]
+        if value:
+            custom[prompt] = value
+        else:
+            custom.pop(prompt, None)
+    profile["custom_answers"] = custom
+    write_json_file(PROFILE_FILE, profile)
+    return profile, common_answers_from_profile(profile), None
+
+
+def common_answers_response() -> dict[str, Any]:
+    """Return editable common answers and field metadata for the browser."""
+    profile = load_applicant_profile()
+    provider = ai_provider_status()
+    return {
+        "fields": list(common_answer_field_map().values()),
+        "answers": common_answers_from_profile(profile),
+        "ai_enabled": bool(provider["enabled"]),
+        "ai_provider": provider["provider"],
+        "model": provider["model"],
+        "ai_message": provider["message"],
+    }
+
+
+def ollama_base_url() -> str:
+    """Return the configured Ollama base URL without a trailing slash."""
+    return os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+
+
+def ollama_model() -> str:
+    """Return the configured Ollama model name."""
+    return os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+
+
+def ollama_available(timeout: float = 0.7) -> bool:
+    """Whether the local Ollama API looks reachable."""
+    try:
+        response = requests.get(f"{ollama_base_url()}/api/tags", timeout=timeout)
+    except requests.RequestException:
+        return False
+    return response.status_code < 400
+
+
+def ai_provider_status() -> dict[str, Any]:
+    """Return the currently available AI polish provider."""
+    if os.getenv("OPENAI_API_KEY"):
+        model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+        return {
+            "enabled": True,
+            "provider": "openai",
+            "model": model,
+            "message": f"AI polish available through OpenAI ({model}).",
+        }
+    model = ollama_model()
+    if ollama_available():
+        return {
+            "enabled": True,
+            "provider": "ollama",
+            "model": model,
+            "message": f"AI polish available locally through Ollama ({model}).",
+        }
+    return {
+        "enabled": False,
+        "provider": "none",
+        "model": model,
+        "message": OLLAMA_SETUP_MESSAGE,
+    }
+
+
+def build_ai_polish_prompt(payload: dict[str, Any], profile: dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Build a safe prompt for review-first answer improvement."""
+    answer_key = clean_payload_text(payload.get("key"), 80)
+    field = common_answer_field_map().get(answer_key)
+    if not field:
+        return "", "Unknown common answer field."
+    draft = clean_payload_text(payload.get("draft"), 3000)
+    if not draft:
+        return "", "Write an answer first, then ask AI to improve it."
+    job = payload.get("job", {})
+    if not isinstance(job, dict):
+        job = {}
+    title = clean_payload_text(job.get("title"), 200) or "Not specified"
+    company = clean_payload_text(job.get("company"), 200) or "Not specified"
+    description = clean_payload_text(job.get("description") or job.get("reason"), 1400) or "Not specified"
+    student_context = clean_payload_text(profile.get("short_intro"), 700) or "High school student seeking entry-level work."
+    prompt = f"""Improve this student job-application answer.
+
+Question type: {field['label']}
+Likely application question: {field['prompt']}
+Current answer: {draft}
+
+Selected job:
+Title: {title}
+Employer: {company}
+Description/context: {description}
+
+Student context: {student_context}
+
+Rules:
+- Return only one improved answer, 1-3 sentences.
+- Keep it honest, natural, specific, and appropriate for a high school student.
+- Do not invent experience, credentials, availability, transportation, legal eligibility, age, or work authorization.
+- Do not answer sensitive/legal/demographic questions.
+- Keep the student's meaning, but make wording clearer and more matched to the job."""
+    return prompt, None
+
+
+def extract_openai_text(payload: dict[str, Any]) -> str:
+    """Extract text from a Responses API payload."""
+    direct = payload.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    chunks = []
+    for item in payload.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                chunks.append(content["text"])
+    return "\n".join(chunks).strip()
+
+
+def extract_ollama_text(payload: dict[str, Any]) -> str:
+    """Extract text from an Ollama generate response."""
+    text = payload.get("response")
+    return text.strip() if isinstance(text, str) else ""
+
+
+def call_openai_polish(prompt: str) -> tuple[dict[str, str], int]:
+    """Call OpenAI for one review-first suggestion."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY is not set."}, 503
+    model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+    try:
+        response = requests.post(
+            OPENAI_RESPONSES_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "instructions": "You improve short job application answers for a student. Return only the revised answer.",
+                "input": prompt,
+                "max_output_tokens": 220,
+                "temperature": 0.2,
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        return {"error": f"Could not reach OpenAI: {exc}"}, 502
+    if response.status_code >= 400:
+        return {"error": f"OpenAI request failed with status {response.status_code}."}, 502
+    try:
+        response_payload = response.json()
+    except ValueError:
+        return {"error": "OpenAI returned a non-JSON response."}, 502
+    suggestion = extract_openai_text(response_payload)
+    if not suggestion:
+        return {"error": "OpenAI did not return a suggestion."}, 502
+    return {"suggestion": suggestion, "model": model, "provider": "openai"}, 200
+
+
+def call_ollama_polish(prompt: str) -> tuple[dict[str, str], int]:
+    """Call local Ollama for one review-first suggestion."""
+    model = ollama_model()
+    try:
+        response = requests.post(
+            f"{ollama_base_url()}/api/generate",
+            json={
+                "model": model,
+                "system": "You improve short job application answers for a student. Return only the revised answer.",
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=45,
+        )
+    except requests.RequestException as exc:
+        return {"error": f"Could not reach Ollama: {exc}. {OLLAMA_SETUP_MESSAGE}"}, 502
+    if response.status_code >= 400:
+        return {
+            "error": (
+                f"Ollama request failed with status {response.status_code}. "
+                f"Make sure `{model}` is installed with `ollama pull {model}`."
+            )
+        }, 502
+    try:
+        response_payload = response.json()
+    except ValueError:
+        return {"error": "Ollama returned a non-JSON response."}, 502
+    suggestion = extract_ollama_text(response_payload)
+    if not suggestion:
+        return {"error": "Ollama did not return a suggestion."}, 502
+    return {"suggestion": suggestion, "model": model, "provider": "ollama"}, 200
+
+
+def improve_common_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
+    """Return an AI-polished answer suggestion without saving it."""
+    prompt, error = build_ai_polish_prompt(payload, load_applicant_profile())
+    if error:
+        return {"error": error}, 400
+    provider = ai_provider_status()
+    if provider["provider"] == "openai":
+        return call_openai_polish(prompt)
+    if provider["provider"] == "ollama":
+        return call_ollama_polish(prompt)
+    return {"error": provider["message"], "provider": "none"}, 503
 
 
 def load_application_records() -> dict[str, dict[str, Any]]:
@@ -424,6 +819,16 @@ def upsert_application(
     records[job["url"]] = record
     save_application_records(records)
     return record, None
+
+
+def app_config() -> dict[str, Any]:
+    """Initial config the static frontend fetches to populate the search form."""
+    return {
+        "default_location": DEFAULT_LOCATION,
+        "radius_choices": RADIUS_ORDER,
+        "default_radius": DEFAULT_RADIUS,
+        "default_min_score": DEFAULT_MIN_SCORE,
+    }
 
 
 def clean_form_value(data: dict[str, list[str]], key: str, default: str) -> str:
@@ -523,798 +928,29 @@ def run_pipeline(location: str, command: list[str]) -> None:
     RUN_STATE.finish(returncode)
 
 
-def html_page() -> str:
-    """Return the local app shell."""
-    location = html.escape(RUN_STATE.snapshot().get("location") or DEFAULT_LOCATION)
-    radius_options = "\n".join(
-        f'<option value="{radius}"{" selected" if radius == DEFAULT_RADIUS else ""}>{radius} miles</option>'
-        for radius in ["5", "10", "15", "25", "35", "50"]
-    )
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JobFind Local Search</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --bg: #eef3f4;
-      --panel: #ffffff;
-      --panel-soft: #f7faf9;
-      --text: #16211f;
-      --muted: #64716f;
-      --line: #d8e0df;
-      --line-strong: #c6d0ce;
-      --accent: #126b62;
-      --accent-strong: #0b4f49;
-      --accent-soft: #e8f3f1;
-      --warn: #9a4526;
-      --shadow: 0 12px 28px rgba(24, 38, 36, 0.08);
-      --shadow-soft: 0 4px 14px rgba(24, 38, 36, 0.06);
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      background:
-        linear-gradient(180deg, #f7faf9 0, var(--bg) 360px);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.45;
-    }}
-    main {{
-      width: min(1240px, calc(100% - 32px));
-      margin: 22px auto 36px;
-    }}
-    h1 {{
-      margin: 0 0 6px;
-      font-size: clamp(26px, 3vw, 34px);
-      line-height: 1.1;
-      letter-spacing: 0;
-    }}
-    .lede {{
-      margin: 0 0 18px;
-      max-width: 680px;
-      color: var(--muted);
-      font-size: 15px;
-    }}
-    form {{
-      display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(120px, 0.6fr)) auto;
-      gap: 10px;
-      align-items: end;
-      padding: 12px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow-soft);
-    }}
-    label {{
-      display: grid;
-      gap: 5px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0;
-    }}
-    input, select, textarea {{
-      width: 100%;
-      min-height: 40px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 8px 10px;
-      color: var(--text);
-      background: #ffffff;
-      font: inherit;
-      outline: none;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-    }}
-    input:focus, select:focus, textarea:focus {{
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(18, 107, 98, 0.14);
-    }}
-    button {{
-      min-height: 40px;
-      border: 0;
-      border-radius: 6px;
-      padding: 8px 16px;
-      background: var(--accent);
-      color: #ffffff;
-      font: inherit;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
-    }}
-    button:disabled {{ opacity: 0.55; cursor: wait; }}
-    button:hover:not(:disabled) {{
-      background: var(--accent-strong);
-      box-shadow: 0 6px 14px rgba(18, 107, 98, 0.18);
-      transform: translateY(-1px);
-    }}
-    .status {{
-      margin: 14px 0;
-      display: grid;
-      grid-template-columns: 190px minmax(0, 1fr);
-      gap: 12px;
-      align-items: stretch;
-    }}
-    .status-box, .log-box {{
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-      box-shadow: var(--shadow-soft);
-    }}
-    .status-box {{
-      display: grid;
-      gap: 6px;
-      align-content: start;
-    }}
-    .status-box strong {{
-      display: inline-flex;
-      width: fit-content;
-      align-items: center;
-      min-height: 26px;
-      padding: 3px 9px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent-strong);
-      font-size: 12px;
-      letter-spacing: 0;
-    }}
-    .status-box span {{
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    pre {{
-      margin: 0;
-      max-height: 170px;
-      overflow: auto;
-      white-space: pre-wrap;
-      color: #243432;
-      font-size: 12px;
-      line-height: 1.4;
-    }}
-    .result-actions {{
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      align-items: center;
-      margin: 12px 0 8px;
-      color: var(--muted);
-      font-size: 14px;
-    }}
-    .result-actions a {{
-      color: var(--accent-strong);
-      font-weight: 700;
-      text-decoration: none;
-    }}
-    .result-actions a:hover {{ text-decoration: underline; }}
-    .workspace {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 340px;
-      gap: 14px;
-      align-items: stretch;
-    }}
-    iframe {{
-      width: 100%;
-      height: 100%;
-      min-height: 74vh;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #ffffff;
-      box-shadow: var(--shadow);
-    }}
-    .apply-panel {{
-      position: sticky;
-      top: 12px;
-      display: grid;
-      gap: 12px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-      box-shadow: var(--shadow);
-    }}
-    .apply-panel h2 {{
-      margin: 0;
-      font-size: 16px;
-      line-height: 1.2;
-    }}
-    .apply-panel p {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
-    }}
-    .apply-panel section {{
-      display: grid;
-      gap: 9px;
-      padding-top: 12px;
-      border-top: 1px solid var(--line);
-    }}
-    .selected-job {{
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel-soft);
-    }}
-    .selected-job strong {{
-      display: block;
-      margin-bottom: 4px;
-    }}
-    .assistant-actions {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }}
-    .assistant-actions button {{
-      padding: 8px 10px;
-      font-size: 13px;
-    }}
-    .assistant-actions button:first-child {{
-      grid-column: 1 / -1;
-    }}
-    .autofill-log {{
-      margin: 0;
-      max-height: 150px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 8px;
-      background: #f8fbfa;
-    }}
-    textarea {{ min-height: 74px; resize: vertical; }}
-    .section-heading {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }}
-    .secondary-button {{
-      min-height: 30px;
-      padding: 5px 9px;
-      border: 1px solid var(--line-strong);
-      background: #f4f8f7;
-      color: var(--accent-strong);
-      font-size: 12px;
-    }}
-    .secondary-button:hover:not(:disabled), .copy-button:hover:not(:disabled) {{
-      background: var(--accent-soft);
-      box-shadow: none;
-    }}
-    .profile-editor {{
-      display: grid;
-      gap: 9px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      background: var(--panel-soft);
-    }}
-    #profile-fields {{
-      display: grid;
-      gap: 9px;
-    }}
-    .profile-editor.hidden {{
-      display: none;
-    }}
-    .profile-editor label {{
-      display: grid;
-      gap: 4px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0;
-    }}
-    .profile-editor input, .profile-editor textarea {{
-      padding: 7px 9px;
-      font-size: 13px;
-      font-weight: 400;
-      text-transform: none;
-    }}
-    .profile-editor textarea {{
-      min-height: 68px;
-    }}
-    .profile-form-actions {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }}
-    .profile-message {{
-      margin: 0;
-      min-height: 18px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }}
-    .profile-list, .application-list {{
-      display: grid;
-      gap: 7px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }}
-    .profile-item {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: center;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 8px;
-      background: #fbfcfc;
-      font-size: 13px;
-    }}
-    .profile-item span, .application-list li {{
-      overflow-wrap: anywhere;
-    }}
-    .copy-button {{
-      min-height: 28px;
-      padding: 4px 8px;
-      border: 1px solid var(--line-strong);
-      background: #f4f8f7;
-      color: var(--accent-strong);
-      font-size: 12px;
-    }}
-    .application-list li {{
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }}
-    @media (max-width: 900px) {{
-      form, .status, .workspace {{ grid-template-columns: 1fr; }}
-      .apply-panel {{ position: static; }}
-      iframe {{ height: 68vh; min-height: 68vh; }}
-    }}
-    @media (max-width: 560px) {{
-      main {{ width: min(100% - 20px, 1240px); margin-top: 16px; }}
-      .assistant-actions, .profile-form-actions {{ grid-template-columns: 1fr; }}
-      .result-actions {{ align-items: flex-start; flex-direction: column; }}
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>JobFind</h1>
-    <p class="lede">Run a local search, then view the refreshed job results below.</p>
-    <form id="search-form">
-      <label>Location
-        <input name="location" value="{location}" autocomplete="postal-code" required>
-      </label>
-      <label>Radius
-        <select name="radius">{radius_options}</select>
-      </label>
-      <label>Mode
-        <select name="mode">
-          <option value="fast" selected>Fast</option>
-          <option value="full">Full</option>
-        </select>
-      </label>
-      <label>Min Score
-        <input name="min_score" value="{DEFAULT_MIN_SCORE}" inputmode="numeric">
-      </label>
-      <button id="run-button" type="submit">Search</button>
-    </form>
-    <section class="status">
-      <div class="status-box">
-        <strong id="status-text">Idle</strong>
-        <span id="status-detail">Ready to search.</span>
-      </div>
-      <div class="log-box"><pre id="logs"></pre></div>
-    </section>
-    <div class="result-actions">
-      <span>Latest generated result page</span>
-      <a href="/jobs_clean.html" target="_blank" rel="noopener">Open in new tab</a>
-    </div>
-    <section class="workspace">
-      <iframe id="results-frame" src="/jobs_clean.html"></iframe>
-      <aside class="apply-panel" aria-label="Apply Assistant">
-        <h2>Apply Assistant</h2>
-        <p>Use this to open Indeed jobs, copy your saved info, and track progress. You still review and submit every application yourself.</p>
-        <div class="selected-job" id="selected-job">
-          <strong>No job selected</strong>
-          <p>Click Apply Assistant on an Indeed job card.</p>
-        </div>
-        <label>Notes
-          <textarea id="application-notes" placeholder="Anything to remember for this application"></textarea>
-        </label>
-        <div class="assistant-actions">
-          <button type="button" id="indeed-login-button">Open Indeed Login</button>
-          <button type="button" id="autofill-button" disabled>Autofill Application</button>
-          <button type="button" id="resume-autofill-button" disabled>Resume Autofill</button>
-          <button type="button" data-application-status="Applied" disabled>Mark Applied</button>
-          <button type="button" data-application-status="Needs follow-up" disabled>Follow Up</button>
-          <button type="button" data-application-status="Skipped" disabled>Skip</button>
-        </div>
-        <section>
-          <h2>Autofill</h2>
-          <p id="autofill-summary">Select a job to start autofill.</p>
-          <pre class="autofill-log" id="autofill-log"></pre>
-        </section>
-        <section>
-          <div class="section-heading">
-            <h2>Profile</h2>
-            <button class="secondary-button" type="button" id="edit-profile-button">Edit Profile</button>
-          </div>
-          <p class="profile-message" id="profile-message"></p>
-          <form class="profile-editor hidden" id="profile-form">
-            <div id="profile-fields"></div>
-            <div class="profile-form-actions">
-              <button type="submit">Save Profile</button>
-              <button class="secondary-button" type="button" id="cancel-profile-button">Cancel</button>
-            </div>
-          </form>
-          <ul class="profile-list" id="profile-list">
-            <li class="application-list">Loading local profile...</li>
-          </ul>
-        </section>
-        <section>
-          <h2>Recent</h2>
-          <ul class="application-list" id="application-list">
-            <li>No applications tracked yet.</li>
-          </ul>
-        </section>
-      </aside>
-    </section>
-  </main>
-  <script>
-    const form = document.querySelector("#search-form");
-    const button = document.querySelector("#run-button");
-    const statusText = document.querySelector("#status-text");
-    const statusDetail = document.querySelector("#status-detail");
-    const logs = document.querySelector("#logs");
-    const frame = document.querySelector("#results-frame");
-    const selectedJobEl = document.querySelector("#selected-job");
-    const notesEl = document.querySelector("#application-notes");
-    const profileList = document.querySelector("#profile-list");
-    const profileForm = document.querySelector("#profile-form");
-    const profileFields = document.querySelector("#profile-fields");
-    const profileMessage = document.querySelector("#profile-message");
-    const editProfileButton = document.querySelector("#edit-profile-button");
-    const cancelProfileButton = document.querySelector("#cancel-profile-button");
-    const applicationList = document.querySelector("#application-list");
-    const applicationButtons = Array.from(document.querySelectorAll("[data-application-status]"));
-    const indeedLoginButton = document.querySelector("#indeed-login-button");
-    const autofillButton = document.querySelector("#autofill-button");
-    const resumeAutofillButton = document.querySelector("#resume-autofill-button");
-    const autofillSummary = document.querySelector("#autofill-summary");
-    const autofillLog = document.querySelector("#autofill-log");
-    let pollTimer = null;
-    let autofillPollTimer = null;
-    let selectedJob = null;
-    let currentProfile = {{}};
-    const profileFieldDefs = [
-      {{ key: "name", label: "Name" }},
-      {{ key: "first_name", label: "First name" }},
-      {{ key: "last_name", label: "Last name" }},
-      {{ key: "preferred_name", label: "Preferred name" }},
-      {{ key: "email", label: "Email" }},
-      {{ key: "phone", label: "Phone" }},
-      {{ key: "city", label: "City" }},
-      {{ key: "state", label: "State" }},
-      {{ key: "school", label: "School" }},
-      {{ key: "graduation_year", label: "Graduation year" }},
-      {{ key: "education_level", label: "Education level" }},
-      {{ key: "availability", label: "Availability", multiline: true }},
-      {{ key: "available_start_date", label: "Available start date" }},
-      {{ key: "desired_hours", label: "Desired hours" }},
-      {{ key: "age_or_work_permit", label: "Age/work permit answer", multiline: true }},
-      {{ key: "work_eligibility", label: "Work eligibility" }},
-      {{ key: "resume_path", label: "Resume path" }},
-      {{ key: "short_intro", label: "Short intro", multiline: true }}
-    ];
-
-    async function refreshStatus() {{
-      const response = await fetch("/api/status", {{ cache: "no-store" }});
-      const data = await response.json();
-      statusText.textContent = data.status.toUpperCase();
-      statusDetail.textContent = data.location ? `Location: ${{data.location}}` : "Ready to search.";
-      logs.textContent = data.logs || "";
-      logs.scrollTop = logs.scrollHeight;
-      button.disabled = data.status === "running";
-      if (data.status === "succeeded") {{
-        frame.src = `/jobs_clean.html?ts=${{Date.now()}}`;
-      }}
-      if (data.status !== "running" && pollTimer) {{
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }}
-    }}
-
-    function escapeText(value) {{
-      return String(value || "").replace(/[&<>"']/g, char => ({{
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      }}[char]));
-    }}
-
-    function profileValueText(value) {{
-      if (value && typeof value === "object") return JSON.stringify(value);
-      return String(value || "");
-    }}
-
-    function renderProfileForm(profile) {{
-      if (!profileFields) return;
-      profileFields.innerHTML = profileFieldDefs.map(field => {{
-        const value = escapeText(profileValueText(profile[field.key]));
-        const input = field.multiline
-          ? `<textarea name="${{field.key}}">${{value}}</textarea>`
-          : `<input name="${{field.key}}" value="${{value}}">`;
-        return `<label>${{escapeText(field.label)}}${{input}}</label>`;
-      }}).join("");
-    }}
-
-    function showProfileMessage(message, isError = false) {{
-      if (!profileMessage) return;
-      profileMessage.textContent = message || "";
-      profileMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
-    }}
-
-    async function loadProfile() {{
-      const response = await fetch("/api/applicant-profile", {{ cache: "no-store" }});
-      const profile = await response.json();
-      currentProfile = profile;
-      renderProfileForm(currentProfile);
-      const rows = Object.entries(profile).filter(([, value]) => profileValueText(value).trim());
-      if (!rows.length) {{
-        profileList.innerHTML = "<li>Add your info to applicant_profile.json.</li>";
-        return;
-      }}
-      profileList.innerHTML = rows.map(([key, value]) => `
-        <li class="profile-item">
-          <span><strong>${{escapeText(key.replaceAll("_", " "))}}</strong><br>${{escapeText(profileValueText(value))}}</span>
-          <button class="copy-button" type="button" data-copy="${{escapeText(profileValueText(value))}}">Copy</button>
-        </li>
-      `).join("");
-    }}
-
-    async function saveProfile(event) {{
-      event.preventDefault();
-      const payload = Object.fromEntries(new FormData(profileForm).entries());
-      const response = await fetch("/api/applicant-profile", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify(payload)
-      }});
-      const result = await response.json().catch(() => ({{ error: "Could not save profile." }}));
-      if (!response.ok) {{
-        showProfileMessage(result.error || "Could not save profile.", true);
-        return;
-      }}
-      currentProfile = result.profile || {{}};
-      await loadProfile();
-      const warnings = result.warnings || [];
-      showProfileMessage(warnings.length ? `Saved. ${{warnings.join(" ")}}` : "Profile saved.");
-      if (profileForm) profileForm.classList.add("hidden");
-    }}
-
-    async function loadApplications() {{
-      const response = await fetch("/api/applications", {{ cache: "no-store" }});
-      const payload = await response.json();
-      const rows = payload.applications || [];
-      applicationList.innerHTML = rows.length
-        ? rows.slice(0, 8).map(row => `
-            <li><strong>${{escapeText(row.status)}}</strong> · ${{escapeText(row.title || "Untitled job")}}<br>${{escapeText(row.company || "")}}</li>
-          `).join("")
-        : "<li>No applications tracked yet.</li>";
-    }}
-
-    function renderSelectedJob(record) {{
-      selectedJob = record;
-      applicationButtons.forEach(button => button.disabled = !selectedJob);
-      if (autofillButton) autofillButton.disabled = !selectedJob;
-      if (!selectedJob) {{
-        selectedJobEl.innerHTML = "<strong>No job selected</strong><p>Click Apply Assistant on an Indeed job card.</p>";
-        return;
-      }}
-      selectedJobEl.innerHTML = `
-        <strong>${{escapeText(selectedJob.title || "Untitled job")}}</strong>
-        <p>${{escapeText(selectedJob.company || "Unknown employer")}} · Score ${{escapeText(selectedJob.score || "")}}</p>
-        <p>Status: ${{escapeText(selectedJob.status || "Opened")}}</p>
-      `;
-      if (notesEl && selectedJob.notes !== undefined) {{
-        notesEl.value = selectedJob.notes || "";
-      }}
-    }}
-
-    async function refreshAutofillStatus() {{
-      const response = await fetch("/api/autofill/status", {{ cache: "no-store" }});
-      const data = await response.json();
-      const report = data.report || {{}};
-      const filled = report.filled_count || 0;
-      const stages = report.stages || [];
-      const stoppedReason = String(report.stopped_reason || "");
-      const needsLogin = stages.includes("login_required") || stoppedReason === "login_required" || String(report.status_reason || "").toLowerCase().includes("login");
-      const needsVerification = stages.includes("verification_required") || stoppedReason === "verification_required";
-      if (autofillSummary) {{
-        if (data.status === "running") autofillSummary.textContent = report.current_action ? `Autofill: ${{report.current_action}}.` : "Autofill is running in a visible browser.";
-        else if (needsVerification) autofillSummary.textContent = "Verification is required. Handle it manually in Chrome, then click Resume Autofill.";
-        else if (needsLogin) autofillSummary.textContent = "Login or verification is required. Log in with Open Indeed Login, then click Resume Autofill.";
-        else if (stoppedReason === "stopped_before_submit") autofillSummary.textContent = `Stopped before submit. Filled ${{filled}} fields. Review and submit manually.`;
-        else if (stoppedReason === "open_login_first") autofillSummary.textContent = "Open Indeed Login first, log in, then run Autofill Application again.";
-        else if (stoppedReason === "navigation_error") autofillSummary.textContent = "Chrome did not open the selected job. Close JobFind Chrome windows, click Open Indeed Login, then try again.";
-        else if (stoppedReason === "resume_needs_review") autofillSummary.textContent = "Resume needs review. Fix resume_path or upload manually, then Resume Autofill.";
-        else if (stoppedReason === "needs_review") autofillSummary.textContent = "Stopped for review. Check the highlighted fields, then Resume Autofill.";
-        else if (data.status === "succeeded") autofillSummary.textContent = `Autofill finished. Filled ${{filled}} fields. Review before submitting.`;
-        else if (data.status === "failed") autofillSummary.textContent = report.error || "Autofill failed.";
-        else autofillSummary.textContent = selectedJob ? "Ready to autofill the selected job." : "Select a job to start autofill.";
-      }}
-      if (autofillLog) {{
-        const reviewItems = (report.current_step_needs_review || []).map(item => `Needs review: ${{item}}`).join("\\n");
-        autofillLog.textContent = [data.logs || "", reviewItems].filter(Boolean).join("\\n");
-        autofillLog.scrollTop = autofillLog.scrollHeight;
-      }}
-      if (autofillButton) autofillButton.disabled = !selectedJob || data.status === "running";
-      const canResume = needsLogin || needsVerification || ["needs_review", "resume_needs_review", "no_safe_advance"].includes(stoppedReason);
-      if (resumeAutofillButton) resumeAutofillButton.disabled = !selectedJob || data.status === "running" || !canResume;
-      if (data.status !== "running" && autofillPollTimer) {{
-        clearInterval(autofillPollTimer);
-        autofillPollTimer = null;
-        await loadApplications();
-      }}
-    }}
-
-    async function saveApplicationStatus(status) {{
-      if (!selectedJob) return;
-      const response = await fetch("/api/applications/status", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{
-          ...selectedJob,
-          status,
-          notes: notesEl ? notesEl.value : ""
-        }})
-      }});
-      const payload = await response.json();
-      if (!response.ok) {{
-        renderSelectedJob({{ ...selectedJob, status: payload.error || "Error" }});
-        return;
-      }}
-      renderSelectedJob(payload.application);
-      await loadApplications();
-    }}
-
-    async function openApplyAssistant(job) {{
-      selectedJob = job;
-      renderSelectedJob({{ ...job, status: "Opened" }});
-      window.open(job.url, "_blank", "noopener");
-      const response = await fetch("/api/applications/open", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify(job)
-      }});
-      const payload = await response.json();
-      if (response.ok) {{
-        renderSelectedJob(payload.application);
-        await loadApplications();
-      }}
-      await refreshAutofillStatus();
-    }}
-
-    async function startAutofill() {{
-      return startAutofillRequest(false);
-    }}
-
-    async function resumeAutofill() {{
-      return startAutofillRequest(true);
-    }}
-
-    async function startAutofillRequest(resume) {{
-      if (!selectedJob) return;
-      const response = await fetch(resume ? "/api/applications/autofill/resume" : "/api/applications/autofill", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify(selectedJob)
-      }});
-      const payload = await response.json();
-      if (!response.ok) {{
-        if (autofillSummary) autofillSummary.textContent = payload.error || "Could not start autofill.";
-        return;
-      }}
-      await refreshAutofillStatus();
-      autofillPollTimer = setInterval(refreshAutofillStatus, 1500);
-    }}
-
-    async function openIndeedLogin() {{
-      const response = await fetch("/api/indeed-login/open", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{}})
-      }});
-      const payload = await response.json();
-      if (!response.ok) {{
-        if (autofillSummary) autofillSummary.textContent = payload.error || "Could not open Indeed login.";
-        return;
-      }}
-      if (autofillSummary) autofillSummary.textContent = payload.status === "already_open"
-        ? "Recovered existing JobFind Chrome session. Continue in that Chrome window."
-        : "Indeed login browser opened. Log in there, then return here.";
-      if (autofillLog) autofillLog.textContent = "Open Indeed Login started. This stores only browser session files under local ignored data/.";
-    }}
-
-    form.addEventListener("submit", async (event) => {{
-      event.preventDefault();
-      button.disabled = true;
-      const body = new URLSearchParams(new FormData(form));
-      const response = await fetch("/api/run", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
-        body
-      }});
-      if (!response.ok) {{
-        const error = await response.json().catch(() => ({{ error: "Could not start search." }}));
-        statusText.textContent = "ERROR";
-        statusDetail.textContent = error.error || "Could not start search.";
-        button.disabled = false;
-        return;
-      }}
-      await refreshStatus();
-      pollTimer = setInterval(refreshStatus, 1500);
-    }});
-
-    document.addEventListener("click", async (event) => {{
-      const copyButton = event.target.closest("[data-copy]");
-      if (copyButton) {{
-        await navigator.clipboard.writeText(copyButton.dataset.copy || "");
-        copyButton.textContent = "Copied";
-        setTimeout(() => {{ copyButton.textContent = "Copy"; }}, 1200);
-      }}
-    }});
-
-    if (editProfileButton) {{
-      editProfileButton.addEventListener("click", () => {{
-        renderProfileForm(currentProfile);
-        profileForm.classList.toggle("hidden");
-        showProfileMessage(profileForm.classList.contains("hidden") ? "" : "Editing local applicant_profile.json.");
-      }});
-    }}
-    if (cancelProfileButton) {{
-      cancelProfileButton.addEventListener("click", () => {{
-        renderProfileForm(currentProfile);
-        profileForm.classList.add("hidden");
-        showProfileMessage("");
-      }});
-    }}
-    if (profileForm) profileForm.addEventListener("submit", saveProfile);
-
-    applicationButtons.forEach(button => {{
-      button.addEventListener("click", () => saveApplicationStatus(button.dataset.applicationStatus));
-    }});
-    if (autofillButton) autofillButton.addEventListener("click", startAutofill);
-    if (resumeAutofillButton) resumeAutofillButton.addEventListener("click", resumeAutofill);
-    if (indeedLoginButton) indeedLoginButton.addEventListener("click", openIndeedLogin);
-
-    window.addEventListener("message", event => {{
-      if (!event.data || event.data.type !== "jobfind:apply-assistant") return;
-      openApplyAssistant(event.data.job);
-    }});
-
-    refreshStatus();
-    refreshAutofillStatus();
-    loadProfile();
-    loadApplications();
-  </script>
-</body>
-</html>
-"""
-
-
 class SearchHandler(BaseHTTPRequestHandler):
     """HTTP routes for the local JobFind app."""
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
-        if path == "/":
-            self.send_text(html_page(), "text/html; charset=utf-8")
+        if path in STATIC_FILES:
+            name, content_type = STATIC_FILES[path]
+            self.send_static_file(name, content_type)
+            return
+        if path == "/api/config":
+            self.send_json(app_config())
             return
         if path == "/api/status":
             self.send_json(RUN_STATE.snapshot())
             return
         if path == "/api/applicant-profile":
             self.send_json(load_applicant_profile())
+            return
+        if path == "/api/common-answers":
+            self.send_json(common_answers_response())
+            return
+        if path == "/api/setup-status":
+            self.send_json(build_setup_status())
             return
         if path == "/api/applications":
             rows = list(load_application_records().values())
@@ -1349,6 +985,25 @@ class SearchHandler(BaseHTTPRequestHandler):
                 return
             profile, warnings = save_applicant_profile_updates(payload)
             self.send_json({"profile": profile, "warnings": warnings})
+            return
+        if path == "/api/common-answers":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            profile, answers, update_error = save_common_answers_updates(payload)
+            if update_error:
+                self.send_json({"error": update_error}, status=400)
+                return
+            self.send_json({"profile": profile, "answers": answers})
+            return
+        if path == "/api/common-answers/improve":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            result, status = improve_common_answer(payload)
+            self.send_json(result, status=status)
             return
         if path == "/api/applications/open":
             payload, error = self.read_json_body()
@@ -1462,6 +1117,19 @@ class SearchHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             return {}, "Request body must be a JSON object."
         return payload, None
+
+    def send_static_file(self, name: str, content_type: str) -> None:
+        file_path = STATIC_DIR / name
+        if not file_path.is_file():
+            self.send_error(404, "Not found")
+            return
+        content = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
 
     def send_results_file(self) -> None:
         if not RESULTS_FILE.exists():

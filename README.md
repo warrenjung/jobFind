@@ -201,6 +201,38 @@ from `applicant_profile.example.json`, then fill in only the fields you want
 available for local copy/paste/autofill. Application progress is saved under
 `data/applications_status.json`, which is also ignored.
 
+The Apply Assistant also has a **Common Answers** section for repeated
+application questions such as availability, transportation, ideal job, teamwork,
+customer service, and why you want the job. These answers are saved locally in
+`applicant_profile.json` under `custom_answers` and are used by autofill when a
+matching application question appears.
+
+Common Answers can optionally use AI wording help. The recommended free option
+is [Ollama](https://ollama.com), which runs locally on your computer without an
+API key:
+
+```bash
+ollama pull llama3.2:3b
+make app
+```
+
+If Ollama is running at `http://localhost:11434`, JobFind will use it for the
+`Improve with AI` button. You can choose a different local model with
+`OLLAMA_MODEL`.
+
+OpenAI is still supported as an optional cloud provider. If `OPENAI_API_KEY` is
+set before starting the local app, JobFind will use OpenAI first:
+
+```bash
+export OPENAI_API_KEY=sk-your-key
+make app
+```
+
+You can also set `OPENAI_MODEL`; it defaults to `gpt-5.1-mini`. AI polish runs
+only through the local Python server, never exposes cloud keys to browser
+JavaScript, and returns a suggestion for you to review. It does not save,
+submit, or replace an answer unless you click `Use suggestion` and then save.
+
 This app is local-only. The browser sends form values to the Python server on
 your machine, and the server runs the same pipeline commands documented above.
 API keys stay in gitignored credential files or environment variables and are

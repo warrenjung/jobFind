@@ -76,6 +76,75 @@ TEXT_FIELD_PATTERNS = (
     ("short_intro", ("cover letter", "introduction", "tell us about yourself", "why are you interested")),
 )
 
+COMMON_ANSWER_PROMPTS = {
+    "ideal_job": (
+        "ideal job",
+        "looking for in a job",
+        "what are you looking for",
+        "best job for you",
+    ),
+    "availability": (
+        "availability",
+        "available",
+        "schedule",
+        "when can you work",
+        "what days can you work",
+        "weekend",
+        "hours per week",
+    ),
+    "transportation": (
+        "transportation",
+        "reliable transportation",
+        "get to work",
+        "commute",
+    ),
+    "why_this_company": (
+        "why do you want to work here",
+        "why are you interested",
+        "why this company",
+        "why this job",
+        "interested in this job",
+        "interested in this company",
+    ),
+    "customer_service": (
+        "customer service",
+        "help customers",
+        "working with customers",
+        "difficult customer",
+    ),
+    "teamwork": (
+        "teamwork",
+        "worked on a team",
+        "team member",
+        "with a team",
+        "coworkers",
+    ),
+    "extra_notes": (
+        "anything else",
+        "additional information",
+        "anything we should know",
+        "tell us more",
+    ),
+}
+
+COMMON_ANSWER_STORAGE_PROMPTS = {
+    "ideal_job": ("What does your ideal job look like?",),
+    "availability": (
+        "When are you available to work?",
+        "Are you available weekends?",
+        "How many hours per week can you work?",
+    ),
+    "transportation": ("Do you have reliable transportation?",),
+    "why_this_company": (
+        "Why do you want to work here?",
+        "Why are you interested in this job?",
+        "Why are you interested in this company?",
+    ),
+    "customer_service": ("Tell us about your customer service experience.",),
+    "teamwork": ("Tell us about a time you worked on a team.",),
+    "extra_notes": ("Anything else an employer should know?",),
+}
+
 SELECT_PATTERNS = (
     ("state", ("state", "province")),
     ("education_level", ("education", "highest level", "grade level")),
@@ -251,6 +320,16 @@ def custom_answers(profile: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def common_custom_answer(profile: dict[str, Any], answer_key: str) -> Optional[str]:
+    """Return a saved Common Answer value for one answer bucket."""
+    answers = custom_answers(profile)
+    for prompt in COMMON_ANSWER_STORAGE_PROMPTS.get(answer_key, ()):
+        answer = answers.get(normalize(prompt))
+        if answer:
+            return answer
+    return None
+
+
 def is_sensitive_prompt(prompt: str) -> bool:
     """Whether a prompt should not be guessed from generic defaults."""
     text = normalize(prompt)
@@ -390,10 +469,6 @@ def answer_for_prompt(prompt: str, profile: dict[str, Any]) -> tuple[Optional[st
     prompt_text = normalize(prompt)
     values = prepared_profile(profile)
 
-    for custom_prompt, answer in custom_answers(profile).items():
-        if custom_prompt and custom_prompt in prompt_text:
-            return answer, "custom answer"
-
     if is_sensitive_prompt(prompt):
         return None, "needs review: sensitive question"
 
@@ -402,6 +477,16 @@ def answer_for_prompt(prompt: str, profile: dict[str, Any]) -> tuple[Optional[st
         if legal_answer:
             return legal_answer, "explicit profile legal/work eligibility answer"
         return None, "needs review: legal/work eligibility question"
+
+    for custom_prompt, answer in custom_answers(profile).items():
+        if custom_prompt and custom_prompt in prompt_text:
+            return answer, "custom answer"
+
+    for answer_key, patterns in COMMON_ANSWER_PROMPTS.items():
+        if any(pattern in prompt_text for pattern in patterns):
+            answer = common_custom_answer(profile, answer_key)
+            if answer:
+                return answer, f"common answer: {answer_key}"
 
     key = match_profile_key(prompt, TEXT_FIELD_PATTERNS)
     if key and values.get(key):

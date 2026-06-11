@@ -152,6 +152,253 @@ class TestApplicantProfile:
         assert error == "Request body must be a JSON object."
 
 
+class TestCommonAnswers:
+    def test_save_common_answers_preserves_existing_custom_and_unknown_keys(self, tmp_path, monkeypatch):
+        profile_file = tmp_path / "applicant_profile.json"
+        monkeypatch.setattr(lss, "PROFILE_FILE", profile_file)
+        lss.write_json_file(
+            profile_file,
+            {
+                "name": "Alex",
+                "favorite_color": "green",
+                "custom_answers": {
+                    "Are you available weekends?": "Yes",
+                    "Unusual question": "Keep me",
+                },
+            },
+        )
+
+        profile, answers, error = lss.save_common_answers_updates(
+            {
+                "answers": {
+                    "ideal_job": "  A friendly part-time job where I can learn. ",
+                    "transportation": " Yes, I can get to work reliably. ",
+                    "browser_state": "ignore",
+                }
+            }
+        )
+
+        assert error is None
+        assert profile["favorite_color"] == "green"
+        assert profile["custom_answers"]["Unusual question"] == "Keep me"
+        assert profile["custom_answers"]["What does your ideal job look like?"] == (
+            "A friendly part-time job where I can learn."
+        )
+        assert answers["transportation"] == "Yes, I can get to work reliably."
+
+    def test_common_answers_payload_rejects_non_object_answers(self):
+        answers, error = lss.common_answers_payload({"answers": []})
+
+        assert answers == {}
+        assert error == "answers must be a JSON object."
+
+    def test_common_answers_uses_profile_availability_fallback(self):
+        answers = lss.common_answers_from_profile({"availability": "Weekends"})
+
+        assert answers["availability"] == "Weekends"
+
+    def test_ai_polish_without_provider_returns_ollama_setup_message(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(lss, "ollama_available", lambda: False)
+
+        payload, status = lss.improve_common_answer({"key": "ideal_job", "draft": "I want to learn."})
+
+        assert status == 503
+        assert "ollama pull" in payload["error"]
+        assert "sk-" not in payload["error"]
+
+    def test_ollama_available_uses_tags_endpoint(self, monkeypatch):
+        calls = []
+
+        class Response:
+            status_code = 200
+
+        def fake_get(url, timeout):
+            calls.append((url, timeout))
+            return Response()
+
+        monkeypatch.setattr(lss.requests, "get", fake_get)
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
+
+        assert lss.ollama_available()
+        assert calls == [("http://localhost:11434/api/tags", 0.7)]
+
+    def test_provider_selection_prefers_openai(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("OPENAI_MODEL", "openai-test-model")
+        monkeypatch.setattr(lss, "ollama_available", lambda: True)
+
+        status = lss.ai_provider_status()
+
+        assert status["enabled"]
+        assert status["provider"] == "openai"
+        assert status["model"] == "openai-test-model"
+
+    def test_provider_selection_uses_ollama_without_openai_key(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("OLLAMA_MODEL", "local-test-model")
+        monkeypatch.setattr(lss, "ollama_available", lambda: True)
+
+        status = lss.ai_provider_status()
+
+        assert status["enabled"]
+        assert status["provider"] == "ollama"
+        assert status["model"] == "local-test-model"
+
+    def test_improve_common_answer_uses_ollama_fallback(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(lss, "ollama_available", lambda: True)
+        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt: ({"suggestion": "Better answer", "provider": "ollama"}, 200))
+
+        payload, status = lss.improve_common_answer({"key": "ideal_job", "draft": "I want to learn."})
+
+        assert status == 200
+        assert payload["suggestion"] == "Better answer"
+        assert payload["provider"] == "ollama"
+
+    def test_improve_common_answer_openai_wins_when_key_exists(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setattr(lss, "ollama_available", lambda: True)
+        monkeypatch.setattr(lss, "call_openai_polish", lambda prompt: ({"suggestion": "OpenAI answer", "provider": "openai"}, 200))
+
+        payload, status = lss.improve_common_answer({"key": "ideal_job", "draft": "I want to learn."})
+
+        assert status == 200
+        assert payload["provider"] == "openai"
+
+    def test_ollama_request_uses_safe_prompt_and_stream_false(self, monkeypatch):
+        calls = []
+
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return {"response": "A clearer answer."}
+
+        def fake_post(url, json, timeout):
+            calls.append((url, json, timeout))
+            return Response()
+
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/")
+        monkeypatch.setenv("OLLAMA_MODEL", "local-test-model")
+        monkeypatch.setattr(lss.requests, "post", fake_post)
+
+        payload, status = lss.call_ollama_polish("Keep the student's meaning.")
+
+        assert status == 200
+        assert payload["suggestion"] == "A clearer answer."
+        assert payload["provider"] == "ollama"
+        url, body, timeout = calls[0]
+        assert url == "http://localhost:11434/api/generate"
+        assert body["model"] == "local-test-model"
+        assert body["stream"] is False
+        assert "Keep the student's meaning." in body["prompt"]
+        assert timeout == 45
+
+    def test_extract_ollama_text(self):
+        assert lss.extract_ollama_text({"response": "  Better wording.  "}) == "Better wording."
+
+    def test_build_ai_polish_prompt_includes_job_context(self):
+        prompt, error = lss.build_ai_polish_prompt(
+            {
+                "key": "why_this_company",
+                "draft": "I like helping people.",
+                "job": {
+                    "title": "Cashier",
+                    "company": "Example Market",
+                    "description": "Help customers and keep the store organized.",
+                },
+            },
+            {"short_intro": "I am a high school student."},
+        )
+
+        assert error is None
+        assert "Cashier" in prompt
+        assert "Example Market" in prompt
+        assert "Do not invent" in prompt
+
+
+class TestSetupStatus:
+    def _isolate_setup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lss, "PROFILE_FILE", tmp_path / "applicant_profile.json")
+        monkeypatch.setattr(lss, "RESULTS_FILE", tmp_path / "jobs_clean.html")
+        monkeypatch.setattr(lss, "latest_login_port", lambda: None)
+        monkeypatch.setattr(lss, "SESSION_RECOVERY_MESSAGE", "")
+
+    def test_missing_profile_reports_incomplete_profile(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+
+        status = lss.build_setup_status()
+
+        assert not status["all_ready"]
+        assert not status["profile_exists"]
+        assert not status["checks"]["profile"]["ready"]
+        assert "name" in status["checks"]["profile"]["message"]
+
+    def test_complete_profile_reports_profile_ready(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+        lss.write_json_file(
+            lss.PROFILE_FILE,
+            {
+                "first_name": "Alex",
+                "last_name": "Rivera",
+                "email": "alex@example.com",
+                "phone": "555-0100",
+                "city": "Cupertino",
+                "state": "CA",
+                "availability": "Weekends",
+            },
+        )
+
+        status = lss.build_setup_status()
+
+        assert status["profile_exists"]
+        assert status["checks"]["profile"]["ready"]
+
+    def test_missing_resume_path_reports_resume_warning(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+        lss.write_json_file(lss.PROFILE_FILE, {"name": "Alex"})
+
+        status = lss.build_setup_status()
+
+        assert not status["checks"]["resume"]["ready"]
+        assert "Resume path is not set" in status["checks"]["resume"]["message"]
+
+    def test_existing_resume_file_reports_resume_ready(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+        resume = tmp_path / "resume.pdf"
+        resume.write_text("fake pdf")
+        lss.write_json_file(lss.PROFILE_FILE, {"name": "Alex", "resume_path": str(resume)})
+
+        status = lss.build_setup_status()
+
+        assert status["checks"]["resume"]["ready"]
+
+    def test_missing_results_file_reports_no_results(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+
+        status = lss.build_setup_status()
+
+        assert not status["checks"]["results"]["ready"]
+        assert "Run a search" in status["checks"]["results"]["message"]
+
+    def test_results_file_reports_results_ready(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+        lss.RESULTS_FILE.write_text("<html></html>")
+
+        status = lss.build_setup_status()
+
+        assert status["checks"]["results"]["ready"]
+
+    def test_live_chrome_port_reports_indeed_login_ready(self, tmp_path, monkeypatch):
+        self._isolate_setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(lss, "latest_login_port", lambda: 9222)
+
+        status = lss.build_setup_status()
+
+        assert status["checks"]["indeed_login"]["ready"]
+
+
 class TestAutofillLoginFlow:
     def test_indeed_profile_path_stays_under_ignored_data(self):
         assert lss.INDEED_PROFILE_DIR == lss.DATA_DIR / "browser_profiles" / "indeed"
@@ -258,3 +505,29 @@ class TestAutofillLoginFlow:
 
         assert lss.latest_login_port() is None
         assert "Close JobFind Chrome windows" in lss.SESSION_RECOVERY_MESSAGE
+
+
+class TestStaticFrontend:
+    def test_app_config_keys(self):
+        cfg = lss.app_config()
+        assert cfg["default_location"] == lss.DEFAULT_LOCATION
+        assert cfg["default_radius"] == lss.DEFAULT_RADIUS
+        assert cfg["default_min_score"] == lss.DEFAULT_MIN_SCORE
+        assert cfg["radius_choices"] == ["5", "10", "15", "25", "35", "50"]
+
+    def test_static_files_exist(self):
+        for name in ("index.html", "app.css", "app.js"):
+            assert (lss.STATIC_DIR / name).is_file()
+
+    def test_index_links_external_assets_and_has_no_inline_blocks(self):
+        index = (lss.STATIC_DIR / "index.html").read_text()
+        assert '/app.css' in index and '/app.js' in index
+        # The frontend was extracted out of the f-string: no giant inline blocks.
+        assert "<style>" not in index
+        assert "<script>" not in index
+
+    def test_static_allowlist_routes(self):
+        assert set(lss.STATIC_FILES) == {"/", "/index.html", "/app.css", "/app.js"}
+        # Only known names are served (no arbitrary paths).
+        for _, (name, _ctype) in lss.STATIC_FILES.items():
+            assert name in {"index.html", "app.css", "app.js"}

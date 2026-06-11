@@ -623,6 +623,7 @@ def build_html_cards(
     main {{
       width: min(1080px, calc(100% - 28px));
       margin: 24px auto 42px;
+      min-width: 0;
     }}
 
     header {{
@@ -645,7 +646,7 @@ def build_html_cards(
 
     .controls {{
       display: grid;
-      grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(120px, 0.7fr)) auto;
+      grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
       gap: 10px;
       align-items: end;
       margin: 16px 0 16px;
@@ -654,6 +655,7 @@ def build_html_cards(
       border-radius: 8px;
       background: var(--card);
       box-shadow: 0 4px 14px rgba(24, 38, 36, 0.06);
+      min-width: 0;
     }}
 
     .controls label {{
@@ -664,9 +666,16 @@ def build_html_cards(
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0;
+      min-width: 0;
+    }}
+
+    .controls label:first-child {{
+      grid-column: span 2;
     }}
 
     .controls input, .controls select {{
+      width: 100%;
+      min-width: 0;
       min-height: 40px;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -695,11 +704,13 @@ def build_html_cards(
       font-size: 12px;
       font-weight: 700;
       white-space: nowrap;
+      align-self: end;
     }}
 
     .jobs {{
       display: grid;
       gap: 12px;
+      min-width: 0;
     }}
 
     .no-match {{
@@ -715,6 +726,7 @@ def build_html_cards(
       border-radius: 8px;
       padding: 16px;
       box-shadow: var(--shadow);
+      min-width: 0;
     }}
 
     .card-topline {{
@@ -776,12 +788,14 @@ def build_html_cards(
       font-size: 19px;
       line-height: 1.25;
       letter-spacing: 0;
+      overflow-wrap: anywhere;
     }}
 
     dl {{
       display: grid;
       gap: 8px;
       margin: 0;
+      min-width: 0;
     }}
 
     dl > div {{
@@ -790,6 +804,7 @@ def build_html_cards(
       gap: 12px;
       padding-top: 8px;
       border-top: 1px solid var(--line);
+      min-width: 0;
     }}
 
     .card-actions {{
@@ -869,6 +884,10 @@ def build_html_cards(
 
       .controls {{
         grid-template-columns: 1fr;
+      }}
+
+      .controls label:first-child {{
+        grid-column: auto;
       }}
 
       .controls .count {{

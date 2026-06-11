@@ -18,6 +18,10 @@ PROFILE = {
     "custom_answers": {
         "Do you have reliable transportation?": "Yes, I can get to work reliably.",
         "How many hours per week can you work?": "15-20 hours per week",
+        "What does your ideal job look like?": "A part-time role where I can learn and help customers.",
+        "Why do you want to work here?": "I like that this job lets me help people and build work experience.",
+        "Tell us about your customer service experience.": "I try to listen carefully and stay patient when helping people.",
+        "Tell us about a time you worked on a team.": "I communicate clearly and do my part on team projects.",
     },
 }
 
@@ -38,7 +42,7 @@ class TestAnswerMatching:
         assert aa.answer_for_prompt("Email address", PROFILE)[0] == "alex@example.com"
         assert aa.answer_for_prompt("Mobile phone", PROFILE)[0] == "555-0148"
         assert aa.answer_for_prompt("High school", PROFILE)[0] == "Cupertino High School"
-        assert aa.answer_for_prompt("Why are you interested?", PROFILE)[0] == PROFILE["short_intro"]
+        assert aa.answer_for_prompt("Why are you interested?", PROFILE)[0].startswith("I like")
 
     def test_custom_answer_wins(self):
         answer, reason = aa.answer_for_prompt("Do you have reliable transportation?", PROFILE)
@@ -59,6 +63,26 @@ class TestAnswerMatching:
         answer, reason = aa.answer_for_prompt("Will you require visa sponsorship?", {})
         assert answer is None
         assert "legal" in reason
+
+    def test_common_answers_match_application_wording(self):
+        assert aa.answer_for_prompt("What does your ideal job look like?", PROFILE)[0] == (
+            "A part-time role where I can learn and help customers."
+        )
+        assert aa.answer_for_prompt("Why do you want to work here?", PROFILE)[0].startswith("I like")
+        assert aa.answer_for_prompt("Tell us about your customer service experience", PROFILE)[0].startswith("I try")
+        assert aa.answer_for_prompt("Describe teamwork with coworkers", PROFILE)[0].startswith("I communicate")
+
+    def test_common_answers_do_not_override_sensitive_questions(self):
+        profile = {
+            "custom_answers": {
+                "Anything else an employer should know?": "My SSN is 123",
+            }
+        }
+
+        answer, reason = aa.answer_for_prompt("What is your Social Security Number?", profile)
+
+        assert answer is None
+        assert "sensitive" in reason
 
 
 class TestSelectMatching:
@@ -116,7 +140,7 @@ class TestFakeFormAutofill:
             assert page.locator("#phone").input_value() == "555-0148"
             assert page.locator("#school").input_value() == "Cupertino High School"
             assert page.locator("#education").input_value() == "High school"
-            assert page.locator("#intro").input_value() == "I am dependable and excited to help customers."
+            assert page.locator("#intro").input_value().startswith("I like")
             assert page.locator("input[name='transportation'][value='yes']").is_checked()
             assert not page.locator("#terms").is_checked()
             assert page.locator("#ssn").input_value() == ""

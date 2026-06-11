@@ -18,9 +18,12 @@
   "resume_path": "/path/to/resume.pdf",
   "short_intro": "I am a responsible high school student looking for a part-time summer job where I can learn, help customers, and be dependable.",
   "custom_answers": {
+    "What does your ideal job look like?": "My ideal job is part-time, has a supportive team, and gives me a chance to learn while helping customers.",
+    "When are you available to work?": "I am available weekdays after 3 PM and on weekends.",
     "Do you have reliable transportation?": "Yes, I have reliable transportation.",
-    "Are you available weekends?": "Yes, I am available on weekends.",
-    "Why are you interested in this job?": "I want to gain work experience, help customers, and be a dependable member of the team.",
-    "How many hours per week can you work?": "15-20 hours per week"
+    "Why do you want to work here?": "I want to gain work experience, help customers, and be a dependable member of the team.",
+    "Tell us about your customer service experience.": "I enjoy helping people, listening carefully, and staying patient when solving problems.",
+    "Tell us about a time you worked on a team.": "In school projects and activities, I try to communicate clearly, do my part, and help the group stay organized.",
+    "Anything else an employer should know?": "I am dependable, willing to learn, and ready to work hard."
   }
 }

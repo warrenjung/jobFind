@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobFind Local Search</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main>
+    <h1>JobFind</h1>
+    <p class="lede">Run a local search, then view the refreshed job results below.</p>
+    <button class="secondary-button setup-toggle hidden" id="setup-toggle" type="button">Setup</button>
+    <section class="setup-card hidden" id="setup-card" aria-label="Setup checklist">
+      <div class="section-heading">
+        <div>
+          <h2>Setup checklist</h2>
+          <p id="setup-summary">Checking local setup...</p>
+        </div>
+        <button class="secondary-button" id="setup-collapse" type="button">Hide</button>
+      </div>
+      <div class="setup-list" id="setup-list"></div>
+    </section>
+    <form id="search-form">
+      <label>Location
+        <input name="location" value="" autocomplete="postal-code" required>
+      </label>
+      <label>Radius
+        <select name="radius"></select>
+      </label>
+      <label>Mode
+        <select name="mode">
+          <option value="fast" selected>Fast</option>
+          <option value="full">Full</option>
+        </select>
+      </label>
+      <label>Min Score
+        <input name="min_score" value="" inputmode="numeric">
+      </label>
+      <button id="run-button" type="submit">Search</button>
+    </form>
+    <section class="status">
+      <div class="status-box">
+        <strong id="status-text">Idle</strong>
+        <span id="status-detail">Ready to search.</span>
+      </div>
+      <div class="log-box"><pre id="logs"></pre></div>
+    </section>
+    <div class="result-actions">
+      <span>Latest generated result page</span>
+      <a href="/jobs_clean.html" target="_blank" rel="noopener">Open in new tab</a>
+    </div>
+    <section class="workspace">
+      <iframe id="results-frame" src="/jobs_clean.html"></iframe>
+      <aside class="apply-panel" aria-label="Apply Assistant">
+        <h2>Apply Assistant</h2>
+        <p>Use this to open Indeed jobs, copy your saved info, and track progress. You still review and submit every application yourself.</p>
+        <div class="selected-job" id="selected-job">
+          <strong>No job selected</strong>
+          <p>Click Apply Assistant on an Indeed job card.</p>
+        </div>
+        <label>Notes
+          <textarea id="application-notes" placeholder="Anything to remember for this application"></textarea>
+        </label>
+        <div class="assistant-actions">
+          <button type="button" id="indeed-login-button">Open Indeed Login</button>
+          <button type="button" id="autofill-button" disabled>Autofill Application</button>
+          <button type="button" id="resume-autofill-button" disabled>Resume Autofill</button>
+          <button type="button" data-application-status="Applied" disabled>Mark Applied</button>
+          <button type="button" data-application-status="Needs follow-up" disabled>Follow Up</button>
+          <button type="button" data-application-status="Skipped" disabled>Skip</button>
+        </div>
+        <section>
+          <h2>Autofill</h2>
+          <p id="autofill-summary">Select a job to start autofill.</p>
+          <pre class="autofill-log" id="autofill-log"></pre>
+        </section>
+        <section>
+          <div class="section-heading">
+            <h2>Common Answers</h2>
+            <button class="secondary-button" type="submit" form="common-answers-form">Save</button>
+          </div>
+          <p class="profile-message" id="common-answers-message">Used by autofill for repeated application questions.</p>
+          <form class="common-answers" id="common-answers-form">
+            <div class="common-answers" id="common-answer-fields"></div>
+          </form>
+          <div class="suggestion-card hidden" id="common-answer-suggestion">
+            <p id="common-answer-suggestion-text"></p>
+            <div class="suggestion-actions">
+              <button type="button" id="use-suggestion-button">Use suggestion</button>
+              <button class="secondary-button" type="button" id="dismiss-suggestion-button">Dismiss</button>
+            </div>
+          </div>
+        </section>
+        <section>
+          <div class="section-heading">
+            <h2>Profile</h2>
+            <button class="secondary-button" type="button" id="edit-profile-button">Edit Profile</button>
+          </div>
+          <p class="profile-message" id="profile-message"></p>
+          <form class="profile-editor hidden" id="profile-form">
+            <div id="profile-fields"></div>
+            <div class="profile-form-actions">
+              <button type="submit">Save Profile</button>
+              <button class="secondary-button" type="button" id="cancel-profile-button">Cancel</button>
+            </div>
+          </form>
+          <ul class="profile-list" id="profile-list">
+            <li class="application-list">Loading local profile...</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Recent</h2>
+          <ul class="application-list" id="application-list">
+            <li>No applications tracked yet.</li>
+          </ul>
+        </section>
+      </aside>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
