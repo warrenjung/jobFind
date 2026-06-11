@@ -108,6 +108,11 @@ COMMON_ANSWER_PROMPTS = {
     ),
     "customer_service": (
         "customer service",
+        "service experience",
+        "guest experience",
+        "food service",
+        "retail service",
+        "serving customers",
         "help customers",
         "working with customers",
         "difficult customer",
@@ -529,38 +534,127 @@ def select_answer_for_prompt(prompt: str, profile: dict[str, Any], options: list
 
 
 def visible_label_for_element(element: Any) -> str:
-    """Collect nearby label/placeholder/name/id text for a form element."""
-    return element.evaluate(
+    """Return the single best human-readable label for a form element.
+
+    Prefers real labels (aria-label, <label>, legend, etc.) over machine
+    identifiers (name/id), which on SPA application forms are hashes/React ids.
+    The result is cleaned with clean_prompt_label() so reports stay readable.
+    """
+    raw = element.evaluate(
         """(el) => {
-          const parts = [];
-          const add = (value) => { if (value && String(value).trim()) parts.push(String(value).trim()); };
-          add(el.getAttribute('aria-label'));
-          add(el.getAttribute('placeholder'));
-          add(el.getAttribute('name'));
-          add(el.getAttribute('id'));
-          let hasDirectLabel = false;
+          const txt = (node) => (node && node.innerText ? String(node.innerText).trim() : '');
+          // Human-readable sources, in order of preference.
+          const aria = el.getAttribute('aria-label');
+          if (aria && aria.trim()) return aria.trim();
           if (el.id) {
             const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-            if (label) {
-              add(label.innerText);
-              hasDirectLabel = true;
-            }
+            if (label && txt(label)) return txt(label);
           }
           const wrappingLabel = el.closest('label');
-          if (wrappingLabel) {
-            add(wrappingLabel.innerText);
-            hasDirectLabel = true;
-          }
+          if (wrappingLabel && txt(wrappingLabel)) return txt(wrappingLabel);
           const fieldset = el.closest('fieldset');
-          if (fieldset) add(fieldset.querySelector('legend')?.innerText);
-          if (!hasDirectLabel) {
-            const sibling = el.previousElementSibling;
-            if (sibling?.tagName?.toLowerCase() === 'label') add(sibling.innerText);
-            else add(sibling?.querySelector?.('label')?.innerText);
+          const legend = fieldset && fieldset.querySelector('legend');
+          if (legend && txt(legend)) return txt(legend);
+          const labelledby = el.getAttribute('aria-labelledby');
+          if (labelledby) {
+            const parts = labelledby.split(/\\s+/).map(id => {
+              const n = document.getElementById(id); return n ? txt(n) : '';
+            }).filter(Boolean);
+            if (parts.length) return parts.join(' ');
           }
-          return parts.join(' ');
+          const sibling = el.previousElementSibling;
+          if (sibling && sibling.tagName && sibling.tagName.toLowerCase() === 'label' && txt(sibling)) {
+            return txt(sibling);
+          }
+          const siblingLabel = sibling && sibling.querySelector ? sibling.querySelector('label') : null;
+          if (siblingLabel && txt(siblingLabel)) return txt(siblingLabel);
+          const placeholder = el.getAttribute('placeholder');
+          if (placeholder && placeholder.trim()) return placeholder.trim();
+          // Last resort: machine identifiers (cleaned on the Python side).
+          return el.getAttribute('name') || el.getAttribute('id') || '';
         }"""
     )
+    return clean_prompt_label(raw)
+
+
+# Machine identifiers that leak into SPA form labels and must be stripped.
+_HASH_TOKEN_RE = re.compile(r"\bq_[0-9a-f]{12,}\b", re.IGNORECASE)
+_REACT_ID_RE = re.compile(r":r[0-9a-z]+:", re.IGNORECASE)
+# Hyphenated component names like "rich-text-question-input" or
+# "multi-select-question-0". Requires a hyphen before the keyword so bare English
+# words ("field", "question", "input") are never stripped.
+_FRAMEWORK_TOKEN_RE = re.compile(
+    r"\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b",
+    re.IGNORECASE,
+)
+
+
+def clean_prompt_label(text: Any) -> str:
+    """Strip machine ids/framework noise from a form label for readable display."""
+    value = clean_text(text)
+    if value == NOT_SPECIFIED:
+        return ""
+    value = _HASH_TOKEN_RE.sub(" ", value)
+    value = _REACT_ID_RE.sub(" ", value)
+    value = _FRAMEWORK_TOKEN_RE.sub(" ", value)
+    value = re.sub(r"[-_]{2,}", " ", value)  # collapse stray hyphen/underscore runs
+    value = re.sub(r"\s+", " ", value).strip()
+    # Strip leading junk left by id removal: dashes/colons, then option-index or
+    # duplicated option tokens like "-0 ", "3 3 " that precede the real question.
+    value = re.sub(r"^[\s\-–—:]+", "", value)
+    value = re.sub(r"^(?:-?\d+\s+){1,3}", "", value)
+    value = re.sub(r"^[\s\-–—:]+", "", value)
+    # Drop a trailing required marker.
+    value = re.sub(r"\s*\*\s*$", "", value).strip()
+    return value
+
+
+def group_question_for_element(element: Any) -> str:
+    """Return the group-level question for a checkbox/radio that's one option.
+
+    For a multi-select ("How many shifts…? [ ]3 [ ]4 [ ]5"), each option's own
+    label is just "3"/"4"/"5"; the real question lives on the surrounding group
+    (fieldset legend, role=group aria-label, or a preceding question heading).
+    """
+    raw = element.evaluate(
+        """(el) => {
+          const txt = (n) => (n && n.innerText ? String(n.innerText).trim() : '');
+          const fromContainer = (c) => {
+            if (!c) return '';
+            const aria = c.getAttribute && c.getAttribute('aria-label');
+            if (aria && aria.trim()) return aria.trim();
+            const lb = c.getAttribute && c.getAttribute('aria-labelledby');
+            if (lb) {
+              const parts = lb.split(/\\s+/).map(id => {
+                const x = document.getElementById(id); return x ? txt(x) : '';
+              }).filter(Boolean);
+              if (parts.length) return parts.join(' ');
+            }
+            const legend = c.querySelector && c.querySelector('legend');
+            if (legend && txt(legend)) return txt(legend);
+            return '';
+          };
+          // Only trust a real grouping container (fieldset / role=group) so a
+          // standalone checkbox is never mislabeled with a neighbour's question.
+          const group = el.closest('fieldset, [role="group"], [role="radiogroup"]');
+          return fromContainer(group);
+        }"""
+    )
+    return clean_prompt_label(raw)
+
+
+def dedupe_review_items(items: list) -> list:
+    """Collapse review items that map to the same question (e.g. multi-select options)."""
+    seen: set = set()
+    out: list = []
+    for item in items:
+        base = re.sub(r"\s*\([^)]*\)\s*$", "", str(item)).strip()
+        key = (clean_prompt_label(base) or str(item)).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def is_submit_like(text: str) -> bool:
@@ -932,7 +1026,11 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
             )
             name = clean_text(info.get("group")) or f"radio-{index}"
             option = clean_text(info.get("option")) or clean_text(radio.get_attribute("value")) or f"Option {index + 1}"
-            prompt = clean_text(info.get("prompt")) or name
+            prompt = (
+                clean_prompt_label(info.get("prompt"))
+                or group_question_for_element(radio)
+                or clean_prompt_label(name)
+            )
             prompts.setdefault(name, prompt)
             groups.setdefault(name, []).append((index, option))
         except Exception as exc:
@@ -960,14 +1058,25 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
 
 
 def inspect_checkbox_controls(page: Any, profile: dict[str, Any], report: dict[str, list[str]]) -> None:
-    """Detect checkboxes but leave them for review in v1."""
+    """Flag checkbox questions for review — once per group, by the question text.
+
+    Multi-select questions render one checkbox per option ("3"/"4"/"5"); we report
+    the group question, not each option, and only once.
+    """
     checkboxes = page.locator("input[type='checkbox']")
+    seen_groups: set = set()
     for index in range(checkboxes.count()):
         checkbox = checkboxes.nth(index)
         try:
             if not checkbox.is_visible() or not checkbox.is_enabled():
                 continue
-            prompt = visible_label_for_element(checkbox)
+            # Prefer the group question; fall back to the checkbox's own label
+            # (for standalone checkboxes like "I certify the info is accurate").
+            prompt = group_question_for_element(checkbox) or visible_label_for_element(checkbox)
+            key = (prompt or f"checkbox-{index}").lower()
+            if key in seen_groups:
+                continue  # another option of the same multi-select question
+            seen_groups.add(key)
             if is_sensitive_prompt(prompt) or is_legal_prompt(prompt):
                 report["needs_review"].append(f"{prompt or 'Checkbox'} (needs review: sensitive/legal checkbox)")
                 continue
@@ -1615,7 +1724,7 @@ def autofill_application(
             report["current_action"] = "Filling"
             review_start = len(report["needs_review"])
             fill_current_step(target, profile, report)
-            new_review = report["needs_review"][review_start:]
+            new_review = dedupe_review_items(report["needs_review"][review_start:])
             if new_review:
                 report["current_step_needs_review"] = new_review
                 report["stopped_reason"] = report.get("stopped_reason") or "needs_review"
@@ -1644,6 +1753,7 @@ def autofill_application(
         report["status_reason"] = "Could not reach application form."
         report["stopped_reason"] = "no_application_form"
     report["filled_count"] = len(report["filled"])
+    report["needs_review"] = dedupe_review_items(report["needs_review"])
     if report["filled"]:
         add_stage(report, "filled_fields")
     if report["needs_review"]:

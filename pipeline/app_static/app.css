@@ -422,6 +422,36 @@ textarea { min-height: 74px; resize: vertical; }
   color: var(--text);
   font-size: 13px;
 }
+.review-questions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.review-questions.hidden {
+  display: none;
+}
+.review-question {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+.review-question strong {
+  font-size: 12px;
+  color: var(--text);
+}
+.review-question span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.review-question .secondary-button {
+  justify-self: end;
+  width: fit-content;
+}
 .suggestion-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

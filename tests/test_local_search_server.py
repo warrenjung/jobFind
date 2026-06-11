@@ -317,6 +317,59 @@ class TestCommonAnswers:
         assert "Example Market" in prompt
         assert "Do not invent" in prompt
 
+    def test_build_question_suggestion_prompt_includes_context_and_common_answers(self):
+        prompt, error = lss.build_question_suggestion_prompt(
+            {
+                "question": "Do you have any service experience?",
+                "job": {
+                    "title": "Cashier",
+                    "company": "Example Market",
+                    "description": "Help customers and keep the store organized.",
+                },
+            },
+            {
+                "short_intro": "I am dependable.",
+                "custom_answers": {
+                    "Tell us about your customer service experience.": "I help people patiently.",
+                },
+            },
+        )
+
+        assert error is None
+        assert "Do you have any service experience?" in prompt
+        assert "Cashier" in prompt
+        assert "I help people patiently." in prompt
+        assert "Do not invent work experience" in prompt
+        assert "If the question asks about service" in prompt
+
+    def test_question_suggestion_rejects_sensitive_and_legal_questions(self):
+        prompt, error = lss.build_question_suggestion_prompt(
+            {"question": "What is your Social Security Number?"},
+            {},
+        )
+        assert prompt == ""
+        assert "should not be answered by AI" in error
+
+        prompt, error = lss.build_question_suggestion_prompt(
+            {"question": "Are you legally authorized to work?"},
+            {},
+        )
+        assert prompt == ""
+        assert "should not be answered by AI" in error
+
+    def test_suggest_application_answer_uses_ollama_fallback(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(lss, "ollama_available", lambda: True)
+        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt: ({"suggestion": "I do not have formal service experience yet, but I am dependable.", "provider": "ollama"}, 200))
+
+        payload, status = lss.suggest_application_answer(
+            {"question": "Do you have any service experience?", "job": {"title": "Cashier"}}
+        )
+
+        assert status == 200
+        assert payload["provider"] == "ollama"
+        assert "dependable" in payload["suggestion"]
+
 
 class TestSetupStatus:
     def _isolate_setup(self, tmp_path, monkeypatch):

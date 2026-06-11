@@ -31,6 +31,11 @@ const autofillButton = document.querySelector("#autofill-button");
 const resumeAutofillButton = document.querySelector("#resume-autofill-button");
 const autofillSummary = document.querySelector("#autofill-summary");
 const autofillLog = document.querySelector("#autofill-log");
+const reviewQuestionsEl = document.querySelector("#review-questions");
+const reviewQuestionSuggestion = document.querySelector("#review-question-suggestion");
+const reviewQuestionSuggestionText = document.querySelector("#review-question-suggestion-text");
+const copyReviewSuggestionButton = document.querySelector("#copy-review-suggestion-button");
+const dismissReviewSuggestionButton = document.querySelector("#dismiss-review-suggestion-button");
 let pollTimer = null;
 let autofillPollTimer = null;
 let selectedJob = null;
@@ -195,6 +200,72 @@ function useSuggestion() {
   showCommonAnswersMessage("Suggestion inserted. Save Common Answers when ready.");
 }
 
+function reviewQuestionText(item) {
+  let text = String(item || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  // Defense-in-depth: strip any machine ids that slipped through the server.
+  text = text
+    .replace(/\bq_[0-9a-f]{12,}\b/gi, " ")
+    .replace(/:r[0-9a-z]+:/gi, " ")
+    .replace(/\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b/gi, " ")
+    .replace(/^[\s\-–—:]+/, "")
+    .replace(/^(?:-?\d+\s+){1,3}/, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*\*\s*$/, "")
+    .trim();
+  return text || "Question on the application — review it on the page.";
+}
+
+function isSuggestableReviewQuestion(item) {
+  const text = String(item || "").toLowerCase();
+  if (!text || text.includes("sensitive") || text.includes("legal") || text.includes("resume")) return false;
+  if (text.includes("captcha") || text.includes("verification") || text.includes("password")) return false;
+  return text.includes("no confident answer") || text.includes("review");
+}
+
+function renderReviewQuestions(items) {
+  if (!reviewQuestionsEl) return;
+  const rows = (items || []).filter(Boolean);
+  if (!rows.length) {
+    reviewQuestionsEl.classList.add("hidden");
+    reviewQuestionsEl.innerHTML = "";
+    return;
+  }
+  reviewQuestionsEl.classList.remove("hidden");
+  reviewQuestionsEl.innerHTML = rows.map((item, index) => {
+    const question = reviewQuestionText(item);
+    const canSuggest = isSuggestableReviewQuestion(item);
+    return `
+      <article class="review-question">
+        <strong>Needs review</strong>
+        <span>${escapeText(question || item)}</span>
+        ${canSuggest ? `<button class="secondary-button" type="button" data-question-suggest="${index}">Get AI suggestion</button>` : ""}
+      </article>
+    `;
+  }).join("");
+  reviewQuestionsEl.dataset.questions = JSON.stringify(rows);
+}
+
+async function suggestReviewAnswer(index) {
+  if (!reviewQuestionsEl) return;
+  const questions = JSON.parse(reviewQuestionsEl.dataset.questions || "[]");
+  const rawQuestion = questions[Number(index)] || "";
+  const question = reviewQuestionText(rawQuestion);
+  if (!question) return;
+  if (reviewQuestionSuggestionText) reviewQuestionSuggestionText.textContent = "Asking AI for a review-first suggestion...";
+  if (reviewQuestionSuggestion) reviewQuestionSuggestion.classList.remove("hidden");
+  const response = await fetch("/api/application-questions/suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, job: selectedJob || {} })
+  });
+  const result = await response.json().catch(() => ({ error: "Could not suggest an answer." }));
+  if (!response.ok) {
+    if (reviewQuestionSuggestionText) reviewQuestionSuggestionText.textContent = result.error || "Could not suggest an answer.";
+    return;
+  }
+  if (reviewQuestionSuggestionText) reviewQuestionSuggestionText.textContent = result.suggestion || "";
+}
+
 function showProfileMessage(message, isError = false) {
   if (!profileMessage) return;
   profileMessage.textContent = message || "";
@@ -342,10 +413,10 @@ async function refreshAutofillStatus() {
     else autofillSummary.textContent = selectedJob ? "Ready to autofill the selected job." : "Select a job to start autofill.";
   }
   if (autofillLog) {
-    const reviewItems = (report.current_step_needs_review || []).map(item => `Needs review: ${item}`).join("\n");
-    autofillLog.textContent = [data.logs || "", reviewItems].filter(Boolean).join("\n");
+    autofillLog.textContent = data.logs || "";
     autofillLog.scrollTop = autofillLog.scrollHeight;
   }
+  renderReviewQuestions(report.current_step_needs_review || []);
   if (autofillButton) autofillButton.disabled = !selectedJob || data.status === "running";
   const canResume = needsLogin || needsVerification || ["needs_review", "resume_needs_review", "no_safe_advance"].includes(stoppedReason);
   if (resumeAutofillButton) resumeAutofillButton.disabled = !selectedJob || data.status === "running" || !canResume;
@@ -474,11 +545,15 @@ document.addEventListener("click", async (event) => {
       if (locationInput) locationInput.focus();
     }
   }
-  const polishButton = event.target.closest("[data-ai-polish]");
-  if (polishButton) {
-    await polishCommonAnswer(polishButton.dataset.aiPolish);
-  }
-});
+      const polishButton = event.target.closest("[data-ai-polish]");
+      if (polishButton) {
+        await polishCommonAnswer(polishButton.dataset.aiPolish);
+      }
+      const questionSuggestButton = event.target.closest("[data-question-suggest]");
+      if (questionSuggestButton) {
+        await suggestReviewAnswer(questionSuggestButton.dataset.questionSuggest);
+      }
+    });
 
 if (editProfileButton) {
   editProfileButton.addEventListener("click", () => {
@@ -500,12 +575,24 @@ if (cancelProfileButton) {
 if (profileForm) profileForm.addEventListener("submit", saveProfile);
 if (commonAnswersForm) commonAnswersForm.addEventListener("submit", saveCommonAnswers);
 if (useSuggestionButton) useSuggestionButton.addEventListener("click", useSuggestion);
-if (dismissSuggestionButton) {
-  dismissSuggestionButton.addEventListener("click", () => {
-    if (commonAnswerSuggestion) commonAnswerSuggestion.classList.add("hidden");
-    showCommonAnswersMessage("Suggestion dismissed.");
-  });
-}
+    if (dismissSuggestionButton) {
+      dismissSuggestionButton.addEventListener("click", () => {
+        if (commonAnswerSuggestion) commonAnswerSuggestion.classList.add("hidden");
+        showCommonAnswersMessage("Suggestion dismissed.");
+      });
+    }
+    if (copyReviewSuggestionButton) {
+      copyReviewSuggestionButton.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(reviewQuestionSuggestionText ? reviewQuestionSuggestionText.textContent || "" : "");
+        copyReviewSuggestionButton.textContent = "Copied";
+        setTimeout(() => { copyReviewSuggestionButton.textContent = "Copy suggestion"; }, 1200);
+      });
+    }
+    if (dismissReviewSuggestionButton) {
+      dismissReviewSuggestionButton.addEventListener("click", () => {
+        if (reviewQuestionSuggestion) reviewQuestionSuggestion.classList.add("hidden");
+      });
+    }
 if (setupToggle) {
   setupToggle.addEventListener("click", () => {
     localStorage.setItem(setupPreferenceKey, "open");

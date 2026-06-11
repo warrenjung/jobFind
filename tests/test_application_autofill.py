@@ -70,6 +70,8 @@ class TestAnswerMatching:
         )
         assert aa.answer_for_prompt("Why do you want to work here?", PROFILE)[0].startswith("I like")
         assert aa.answer_for_prompt("Tell us about your customer service experience", PROFILE)[0].startswith("I try")
+        assert aa.answer_for_prompt("Do you have any service experience?", PROFILE)[0].startswith("I try")
+        assert aa.answer_for_prompt("Describe any food service or retail service experience", PROFILE)[0].startswith("I try")
         assert aa.answer_for_prompt("Describe teamwork with coworkers", PROFILE)[0].startswith("I communicate")
 
     def test_common_answers_do_not_override_sensitive_questions(self):
@@ -562,3 +564,59 @@ class TestRealChromeLauncher:
         assert aa.is_submit_like("Submit application")
         assert aa.is_submit_like("Continue")
         assert not aa.is_submit_like("First name")
+
+
+class TestCleanPromptLabel:
+    def test_strips_hash_framework_id_and_required_marker(self):
+        raw = ("q_c05e0398d79935ef9e3661321d291e28 rich-text-question-input-:r2c: "
+               "What are 3 things you'd look for in an ideal job? *")
+        assert aa.clean_prompt_label(raw) == "What are 3 things you'd look for in an ideal job?"
+
+    def test_strips_multiselect_option_prefix(self):
+        raw = "multi-select-question-:rn:-0 3 3 How many shifts per week are you looking to work?"
+        assert aa.clean_prompt_label(raw) == "How many shifts per week are you looking to work?"
+
+    def test_pure_hash_becomes_empty(self):
+        assert aa.clean_prompt_label("q_93ba5d63afd79925ba52cb7dd81a1791") == ""
+
+    def test_preserves_real_words(self):
+        assert aa.clean_prompt_label("What field do you want to work in?") == "What field do you want to work in?"
+        assert aa.clean_prompt_label("Email address") == "Email address"
+
+
+class TestDedupeReviewItems:
+    def test_collapses_repeated_multiselect_question(self):
+        items = [
+            "multi-select-question-:rn:-0 3 3 How many shifts per week? (needs review: no matching option)",
+            "multi-select-question-:rn:-1 4 4 How many shifts per week? (needs review: no matching option)",
+            "multi-select-question-:rn:-2 5 5 How many shifts per week? (needs review: no matching option)",
+        ]
+        assert len(aa.dedupe_review_items(items)) == 1
+
+    def test_keeps_distinct_items(self):
+        items = [
+            "What are 3 things you'd look for? (needs review: no confident answer)",
+            "Reached the final submit step — review and submit it yourself.",
+        ]
+        assert len(aa.dedupe_review_items(items)) == 2
+
+
+class TestMultiSelectQuestionLabel:
+    def test_copies_group_question_once_not_each_option(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_multiselect_question.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        try:
+            shift_items = [r for r in report["needs_review"] if "shift" in r.lower()]
+            # Exactly one review item, and it is the question (not "3"/"4"/"5").
+            assert len(shift_items) == 1
+            assert "How many shifts per week" in shift_items[0]
+            # No bare option numbers leaked in as their own review items.
+            for r in report["needs_review"]:
+                head = r.strip()[:2]
+                assert head not in ("3 ", "4 ", "5 ")
+                assert r.strip() not in ("3", "4", "5")
+        finally:
+            aa.close_report_browser(report)

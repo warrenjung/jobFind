@@ -638,6 +638,50 @@ Rules:
     return prompt, None
 
 
+def build_question_suggestion_prompt(payload: dict[str, Any], profile: dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Build a safe prompt for a review-field answer suggestion."""
+    question = clean_payload_text(payload.get("question"), 1000)
+    if not question:
+        return "", "Question text is required."
+    if application_autofill.is_sensitive_prompt(question) or application_autofill.is_legal_prompt(question):
+        return "", "This question needs your review and should not be answered by AI."
+    job = payload.get("job", {})
+    if not isinstance(job, dict):
+        job = {}
+    title = clean_payload_text(job.get("title"), 200) or "Not specified"
+    company = clean_payload_text(job.get("company"), 200) or "Not specified"
+    description = clean_payload_text(job.get("description") or job.get("reason"), 1400) or "Not specified"
+    student_context = clean_payload_text(profile.get("short_intro"), 700) or "High school student seeking entry-level work."
+    common = common_answers_from_profile(profile)
+    common_lines = [
+        f"- {meta['label']}: {common.get(key)}"
+        for key, meta in common_answer_field_map().items()
+        if common.get(key)
+    ]
+    common_context = "\n".join(common_lines) or "- No saved common answers."
+    prompt = f"""Draft a review-first answer for a student job application question.
+
+Application question: {question}
+
+Selected job:
+Title: {title}
+Employer: {company}
+Description/context: {description}
+
+Student profile/context: {student_context}
+Saved common answers:
+{common_context}
+
+Rules:
+- Return only one suggested answer, 1-3 sentences.
+- Keep it honest, natural, and appropriate for a high school student.
+- Do not invent work experience, credentials, availability, transportation, legal eligibility, age, or work authorization.
+- If the question asks about service/customer/food/retail experience and the profile does not show formal experience, say that honestly and emphasize reliability, willingness to learn, school/team experience, and customer-friendly skills.
+- Do not answer sensitive/legal/demographic questions.
+- This is a suggestion for user review, not an automatic form submission."""
+    return prompt, None
+
+
 def extract_openai_text(payload: dict[str, Any]) -> str:
     """Extract text from a Responses API payload."""
     direct = payload.get("output_text")
@@ -732,6 +776,19 @@ def call_ollama_polish(prompt: str) -> tuple[dict[str, str], int]:
 def improve_common_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
     """Return an AI-polished answer suggestion without saving it."""
     prompt, error = build_ai_polish_prompt(payload, load_applicant_profile())
+    if error:
+        return {"error": error}, 400
+    provider = ai_provider_status()
+    if provider["provider"] == "openai":
+        return call_openai_polish(prompt)
+    if provider["provider"] == "ollama":
+        return call_ollama_polish(prompt)
+    return {"error": provider["message"], "provider": "none"}, 503
+
+
+def suggest_application_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
+    """Return a review-first answer suggestion for an application question."""
+    prompt, error = build_question_suggestion_prompt(payload, load_applicant_profile())
     if error:
         return {"error": error}, 400
     provider = ai_provider_status()
@@ -1003,6 +1060,14 @@ class SearchHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": error}, status=400)
                 return
             result, status = improve_common_answer(payload)
+            self.send_json(result, status=status)
+            return
+        if path == "/api/application-questions/suggest":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            result, status = suggest_application_answer(payload)
             self.send_json(result, status=status)
             return
         if path == "/api/applications/open":
