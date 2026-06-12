@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import application_autofill as aa
+import autofill_browser as ab
 
 
 PROFILE = {
@@ -149,7 +150,8 @@ class TestFakeFormAutofill:
             assert page.locator("#submitted").input_value() == "no"
             assert report["submitted"] is False
             assert report["filled_count"] >= 8
-            assert any("Checkbox" in item or "accurate" in item for item in report["needs_review"])
+            assert any(item["kind"] == "checkbox" for item in report["review_items"])
+            assert any("accurate" in item["question"].lower() for item in report["review_items"])
         finally:
             aa.close_report_browser(report)
 
@@ -358,6 +360,7 @@ class TestMultiStepApply:
         try:
             assert report.get("steps_completed") == 1
             assert report["stopped_reason"] == "resume_needs_review"
+            assert any(item["kind"] == "resume" for item in report["current_step_review_items"])
             assert any("resume_path" in item for item in report["current_step_needs_review"])
             assert page.locator("#step2").evaluate("(el) => el.classList.contains('active')")
             assert page.locator("#submitted").input_value() == "no"
@@ -377,6 +380,8 @@ class TestMultiStepApply:
         try:
             assert report.get("steps_completed") == 0
             assert report["stopped_reason"] == "needs_review"
+            assert any("social security" in item["question"].lower() for item in report["current_step_review_items"])
+            assert all(item["suggestable"] is False for item in report["current_step_review_items"])
             assert any("Social Security" in item for item in report["current_step_needs_review"])
             assert page.locator("#step1").evaluate("(el) => el.classList.contains('active')")
             assert page.locator("#step2").evaluate("(el) => !el.classList.contains('active')")
@@ -447,8 +452,8 @@ class TestRealChromeLauncher:
     def test_chrome_session_metadata_round_trips(self, tmp_path):
         profile_dir = tmp_path / "indeed"
 
-        saved = aa.save_chrome_session(profile_dir, 9444)
-        loaded = aa.load_chrome_session(profile_dir)
+        saved = ab.save_chrome_session(profile_dir, 9444)
+        loaded = ab.load_chrome_session(profile_dir)
 
         assert saved["debug_port"] == 9444
         assert loaded is not None
@@ -457,15 +462,15 @@ class TestRealChromeLauncher:
 
     def test_recovers_live_default_port_session(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / "indeed"
-        monkeypatch.setattr(aa, "chrome_debug_ready", lambda port: port == 9222)
-        monkeypatch.setattr(aa, "chrome_process_uses_profile", lambda port, path: port == 9222 and path == profile_dir)
+        monkeypatch.setattr(ab, "chrome_debug_ready", lambda port: port == 9222)
+        monkeypatch.setattr(ab, "chrome_process_uses_profile", lambda port, path: port == 9222 and path == profile_dir)
 
-        recovered = aa.recover_chrome_session(profile_dir)
+        recovered = ab.recover_chrome_session(profile_dir)
 
         assert recovered is not None
         assert recovered["debug_port"] == 9222
         assert recovered["recovered"] is True
-        assert aa.load_chrome_session(profile_dir)["debug_port"] == 9222
+        assert ab.load_chrome_session(profile_dir)["debug_port"] == 9222
 
     def test_visible_autofill_without_login_session_stops_before_browser_launch(self, monkeypatch):
         def fail_start_playwright():
@@ -515,19 +520,19 @@ class TestRealChromeLauncher:
         assert report["filled_count"] == 0
 
     def test_cdp_endpoint_url(self):
-        assert aa.cdp_endpoint(9222) == "http://127.0.0.1:9222"
+        assert ab.cdp_endpoint(9222) == "http://127.0.0.1:9222"
 
     def test_find_chrome_executable_returns_existing_macos_path(self, monkeypatch):
         macos_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        monkeypatch.setattr(aa.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(ab.platform, "system", lambda: "Darwin")
         monkeypatch.setattr(Path, "exists", lambda self: str(self) == macos_path)
-        assert aa.find_chrome_executable() == macos_path
+        assert ab.find_chrome_executable() == macos_path
 
     def test_find_chrome_executable_none_when_absent(self, monkeypatch):
-        monkeypatch.setattr(aa.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(ab.platform, "system", lambda: "Linux")
         monkeypatch.setattr(Path, "exists", lambda self: False)
-        monkeypatch.setattr(aa.shutil, "which", lambda name: None)
-        assert aa.find_chrome_executable() is None
+        monkeypatch.setattr(ab.shutil, "which", lambda name: None)
+        assert ab.find_chrome_executable() is None
 
     def test_launch_user_chrome_builds_plain_args(self, monkeypatch, tmp_path):
         captured = {}
@@ -540,11 +545,11 @@ class TestRealChromeLauncher:
             captured["args"] = args
             return FakeProc()
 
-        monkeypatch.setattr(aa, "find_chrome_executable", lambda: "/fake/chrome")
-        monkeypatch.setattr(aa.subprocess, "Popen", fake_popen)
-        monkeypatch.setattr(aa, "chrome_debug_ready", lambda port: True)
+        monkeypatch.setattr(ab, "find_chrome_executable", lambda: "/fake/chrome")
+        monkeypatch.setattr(ab.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(ab, "chrome_debug_ready", lambda port: True)
 
-        proc = aa.launch_user_chrome(tmp_path / "profile", 9222, start_url="https://x")
+        proc = ab.launch_user_chrome(tmp_path / "profile", 9222, start_url="https://x")
         assert isinstance(proc, FakeProc)
         args = captured["args"]
         assert args[0] == "/fake/chrome"
@@ -555,9 +560,9 @@ class TestRealChromeLauncher:
         assert not any("enable-automation" in a for a in args)
 
     def test_launch_user_chrome_requires_chrome(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(aa, "find_chrome_executable", lambda: None)
+        monkeypatch.setattr(ab, "find_chrome_executable", lambda: None)
         with pytest.raises(RuntimeError):
-            aa.launch_user_chrome(tmp_path / "profile", 9222, chrome_path=None)
+            ab.launch_user_chrome(tmp_path / "profile", 9222, chrome_path=None)
 
     def test_never_submits_constant_buttons(self):
         # Guardrail: submit-like controls are recognized so they are left alone.
@@ -600,6 +605,25 @@ class TestDedupeReviewItems:
         ]
         assert len(aa.dedupe_review_items(items)) == 2
 
+    def test_collapses_structured_review_items(self):
+        items = [
+            aa.build_review_item(
+                question="multi-select-question-:rn:-0 3 3 How many shifts per week?",
+                fallback="Question",
+                reason="needs review: no matching option",
+                kind="checkbox",
+            ),
+            aa.build_review_item(
+                question="multi-select-question-:rn:-1 4 4 How many shifts per week?",
+                fallback="Question",
+                reason="needs review: no matching option",
+                kind="checkbox",
+            ),
+        ]
+        deduped = aa.dedupe_review_items(items)
+        assert len(deduped) == 1
+        assert deduped[0]["question"] == "How many shifts per week?"
+
 
 class TestMultiSelectQuestionLabel:
     def test_copies_group_question_once_not_each_option(self):
@@ -613,6 +637,10 @@ class TestMultiSelectQuestionLabel:
             # Exactly one review item, and it is the question (not "3"/"4"/"5").
             assert len(shift_items) == 1
             assert "How many shifts per week" in shift_items[0]
+            structured = [item for item in report["review_items"] if "shift" in item["question"].lower()]
+            assert len(structured) == 1
+            assert structured[0]["question"].startswith("How many shifts per week are you looking to work")
+            assert structured[0]["kind"] == "checkbox"
             # No bare option numbers leaked in as their own review items.
             for r in report["needs_review"]:
                 head = r.strip()[:2]
@@ -620,3 +648,30 @@ class TestMultiSelectQuestionLabel:
                 assert r.strip() not in ("3", "4", "5")
         finally:
             aa.close_report_browser(report)
+
+
+class TestStructuredReviewItems:
+    def test_review_item_contains_clean_question_and_reason(self):
+        item = aa.build_review_item(
+            question="q_c05e0398d79935ef9e3661321d291e28 rich-text-question-input-:r2c: What are 3 things you'd look for in an ideal job? *",
+            fallback="Question",
+            reason="needs review: no confident answer",
+            kind="text",
+        )
+
+        assert item["question"] == "What are 3 things you'd look for in an ideal job?"
+        assert item["reason"] == "No confident answer"
+        assert item["suggestable"] is True
+        assert "needs review" in item["legacy_text"].lower()
+
+    def test_structured_resume_review_item_is_not_suggestable(self):
+        item = aa.build_review_item(
+            question="Resume upload",
+            fallback="Resume upload",
+            reason="resume file not found at /tmp/missing.pdf — add a real PDF or fix resume_path",
+            kind="resume",
+            suggestable=False,
+        )
+
+        assert item["suggestable"] is False
+        assert "resume file not found" in item["legacy_text"]

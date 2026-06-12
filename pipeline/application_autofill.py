@@ -7,167 +7,45 @@ fields from applicant_profile.json. It intentionally never submits forms.
 
 import argparse
 import json
-import os
-import platform
 import re
-import shutil
-import socket
-import subprocess
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-
-NOT_SPECIFIED = "Not specified"
-
-SENSITIVE_PATTERNS = (
-    "social security",
-    "ssn",
-    "password",
-    "passcode",
-    "captcha",
-    "verification code",
-    "one-time code",
-    "otp",
-    "criminal",
-    "felony",
-    "background check",
-    "disability",
-    "veteran",
-    "race",
-    "ethnicity",
-    "gender",
-    "hispanic",
-    "date of birth",
-    "birth date",
-    "birthdate",
-)
-
-LEGAL_PATTERNS = (
-    "authorized to work",
-    "legally authorized",
-    "work authorization",
-    "eligible to work",
-    "require sponsorship",
-    "visa sponsorship",
-    "at least 16",
-    "at least 18",
-    "work permit",
-)
-
-TEXT_FIELD_PATTERNS = (
-    ("first_name", ("first name", "given name")),
-    ("last_name", ("last name", "surname", "family name")),
-    ("preferred_name", ("preferred name", "nickname")),
-    ("name", ("full name", "your name", "name")),
-    ("email", ("email", "e-mail")),
-    ("phone", ("phone", "mobile", "telephone", "cell")),
-    ("city", ("city",)),
-    ("state", ("state", "province")),
-    ("school", ("school", "high school")),
-    ("graduation_year", ("graduation year", "grad year", "year of graduation")),
-    ("available_start_date", ("start date", "available start", "when can you start")),
-    ("desired_hours", ("desired hours", "hours per week", "how many hours")),
-    ("availability", ("availability", "available", "schedule")),
-    ("work_eligibility", LEGAL_PATTERNS),
-    ("education_level", ("education", "highest level", "grade level")),
-    ("short_intro", ("cover letter", "introduction", "tell us about yourself", "why are you interested")),
-)
-
-COMMON_ANSWER_PROMPTS = {
-    "ideal_job": (
-        "ideal job",
-        "looking for in a job",
-        "what are you looking for",
-        "best job for you",
-    ),
-    "availability": (
-        "availability",
-        "available",
-        "schedule",
-        "when can you work",
-        "what days can you work",
-        "weekend",
-        "hours per week",
-    ),
-    "transportation": (
-        "transportation",
-        "reliable transportation",
-        "get to work",
-        "commute",
-    ),
-    "why_this_company": (
-        "why do you want to work here",
-        "why are you interested",
-        "why this company",
-        "why this job",
-        "interested in this job",
-        "interested in this company",
-    ),
-    "customer_service": (
-        "customer service",
-        "service experience",
-        "guest experience",
-        "food service",
-        "retail service",
-        "serving customers",
-        "help customers",
-        "working with customers",
-        "difficult customer",
-    ),
-    "teamwork": (
-        "teamwork",
-        "worked on a team",
-        "team member",
-        "with a team",
-        "coworkers",
-    ),
-    "extra_notes": (
-        "anything else",
-        "additional information",
-        "anything we should know",
-        "tell us more",
-    ),
-}
-
-COMMON_ANSWER_STORAGE_PROMPTS = {
-    "ideal_job": ("What does your ideal job look like?",),
-    "availability": (
-        "When are you available to work?",
-        "Are you available weekends?",
-        "How many hours per week can you work?",
-    ),
-    "transportation": ("Do you have reliable transportation?",),
-    "why_this_company": (
-        "Why do you want to work here?",
-        "Why are you interested in this job?",
-        "Why are you interested in this company?",
-    ),
-    "customer_service": ("Tell us about your customer service experience.",),
-    "teamwork": ("Tell us about a time you worked on a team.",),
-    "extra_notes": ("Anything else an employer should know?",),
-}
-
-SELECT_PATTERNS = (
-    ("state", ("state", "province")),
-    ("education_level", ("education", "highest level", "grade level")),
-    ("graduation_year", ("graduation year", "grad year")),
-)
-
-SEARCH_FIELD_PATTERNS = (
-    "job title keywords company",
-    "title keywords company",
-    "city state zip",
-    "city state zip code",
-    "where city state",
-    "what job title",
-    "text input what",
-    "text input where",
-    "search jobs",
-    "search job",
-    "keyword search",
+import autofill_browser
+from autofill_review import (
+    COMMON_ANSWER_PROMPTS,
+    COMMON_ANSWER_STORAGE_PROMPTS,
+    LEGAL_PATTERNS,
+    NOT_SPECIFIED,
+    SEARCH_FIELD_PATTERNS,
+    SELECT_PATTERNS,
+    SENSITIVE_PATTERNS,
+    TEXT_FIELD_PATTERNS,
+    add_review_item,
+    answer_for_prompt,
+    build_review_item,
+    clean_prompt_label,
+    clean_text,
+    common_custom_answer,
+    custom_answers,
+    dedupe_review_items,
+    group_question_for_element,
+    is_legal_prompt,
+    is_resume_step,
+    is_search_prompt,
+    is_sensitive_prompt,
+    load_profile,
+    normalize,
+    prepared_profile,
+    resume_path_issue,
+    resolve_resume_path,
+    reveal_resume_upload_input,
+    review_item_legacy_text,
+    review_reason_text,
+    select_answer_for_prompt,
+    split_name,
+    sync_legacy_review_strings,
+    visible_label_for_element,
 )
 
 APPLY_CONTROL_PATTERNS = (
@@ -263,96 +141,7 @@ LOGIN_PAGE_PATTERNS = (
     "password",
 )
 
-INDEED_LOGIN_URL = "https://secure.indeed.com/auth"
-
-
-def clean_text(value: Any) -> str:
-    """Normalize browser/profile text for matching."""
-    text = "" if value is None else str(value)
-    return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
-
-
-def normalize(value: Any) -> str:
-    """Return a lowercase simplified string."""
-    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
-
-
-def load_profile(path: Path) -> dict[str, Any]:
-    """Load an applicant profile JSON file."""
-    if not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8") as file:
-        data = json.load(file)
-    return data if isinstance(data, dict) else {}
-
-
-def split_name(full_name: Any) -> tuple[str, str]:
-    """Split a full name into first and last parts for fallback matching."""
-    parts = clean_text(full_name).split()
-    if not parts:
-        return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
-    return parts[0], " ".join(parts[1:])
-
-
-def prepared_profile(profile: dict[str, Any]) -> dict[str, str]:
-    """Return profile values with first/last-name fallbacks populated."""
-    output: dict[str, str] = {}
-    for key, value in profile.items():
-        if isinstance(value, (str, int, float)):
-            text = clean_text(value)
-            if text:
-                output[key] = text
-
-    first, last = split_name(output.get("name", ""))
-    output.setdefault("first_name", first)
-    output.setdefault("last_name", last)
-    return output
-
-
-def custom_answers(profile: dict[str, Any]) -> dict[str, str]:
-    """Return normalized custom-answer prompts mapped to answer text."""
-    answers = profile.get("custom_answers", {})
-    if not isinstance(answers, dict):
-        return {}
-    result = {}
-    for prompt, answer in answers.items():
-        key = normalize(prompt)
-        text = clean_text(answer)
-        if key and text:
-            result[key] = text
-    return result
-
-
-def common_custom_answer(profile: dict[str, Any], answer_key: str) -> Optional[str]:
-    """Return a saved Common Answer value for one answer bucket."""
-    answers = custom_answers(profile)
-    for prompt in COMMON_ANSWER_STORAGE_PROMPTS.get(answer_key, ()):
-        answer = answers.get(normalize(prompt))
-        if answer:
-            return answer
-    return None
-
-
-def is_sensitive_prompt(prompt: str) -> bool:
-    """Whether a prompt should not be guessed from generic defaults."""
-    text = normalize(prompt)
-    return any(pattern in text for pattern in SENSITIVE_PATTERNS)
-
-
-def is_legal_prompt(prompt: str) -> bool:
-    """Whether a prompt needs explicit profile data rather than guessing."""
-    text = normalize(prompt)
-    return any(pattern in text for pattern in LEGAL_PATTERNS)
-
-
-def is_search_prompt(prompt: str) -> bool:
-    """Whether a field is part of a job-site search form, not an application."""
-    text = normalize(prompt)
-    if text in {"q", "l", "what", "where", "query", "search"}:
-        return True
-    return any(pattern in text for pattern in SEARCH_FIELD_PATTERNS)
+INDEED_LOGIN_URL = autofill_browser.INDEED_LOGIN_URL
 
 
 def is_blocked_page(title: str, body_text: str = "") -> bool:
@@ -456,205 +245,6 @@ def add_stage(report: dict[str, Any], stage: str) -> None:
     stages = report.setdefault("stages", [])
     if stage not in stages:
         stages.append(stage)
-
-
-def match_profile_key(prompt: str, patterns: tuple[tuple[str, tuple[str, ...]], ...]) -> Optional[str]:
-    """Find the profile key that best matches a label/name/placeholder."""
-    text = normalize(prompt)
-    if not text:
-        return None
-    for key, phrases in patterns:
-        if any(phrase in text for phrase in phrases):
-            return key
-    return None
-
-
-def answer_for_prompt(prompt: str, profile: dict[str, Any]) -> tuple[Optional[str], str]:
-    """Return a profile/custom answer for a field prompt, or why it was skipped."""
-    prompt_text = normalize(prompt)
-    values = prepared_profile(profile)
-
-    if is_sensitive_prompt(prompt):
-        return None, "needs review: sensitive question"
-
-    if is_legal_prompt(prompt):
-        legal_answer = values.get("work_eligibility") or values.get("age_or_work_permit")
-        if legal_answer:
-            return legal_answer, "explicit profile legal/work eligibility answer"
-        return None, "needs review: legal/work eligibility question"
-
-    for custom_prompt, answer in custom_answers(profile).items():
-        if custom_prompt and custom_prompt in prompt_text:
-            return answer, "custom answer"
-
-    for answer_key, patterns in COMMON_ANSWER_PROMPTS.items():
-        if any(pattern in prompt_text for pattern in patterns):
-            answer = common_custom_answer(profile, answer_key)
-            if answer:
-                return answer, f"common answer: {answer_key}"
-
-    key = match_profile_key(prompt, TEXT_FIELD_PATTERNS)
-    if key and values.get(key):
-        return values[key], f"profile field: {key}"
-
-    text = prompt_text
-    if "transportation" in text:
-        return "I have reliable transportation.", "safe default: transportation"
-    if "weekend" in text and values.get("availability"):
-        return values["availability"], "profile field: availability"
-    if ("why" in text or "interested" in text) and values.get("short_intro"):
-        return values["short_intro"], "profile field: short_intro"
-
-    return None, "needs review: no confident answer"
-
-
-def select_answer_for_prompt(prompt: str, profile: dict[str, Any], options: list[str]) -> tuple[Optional[str], str]:
-    """Choose a select/radio option when it safely matches the desired answer."""
-    values = prepared_profile(profile)
-    key = match_profile_key(prompt, SELECT_PATTERNS)
-    desired = values.get(key or "") if key else None
-    if not desired:
-        desired, reason = answer_for_prompt(prompt, profile)
-        if not desired:
-            return None, reason
-
-    desired_norm = normalize(desired)
-    for option in options:
-        option_norm = normalize(option)
-        if option_norm and (option_norm == desired_norm or desired_norm in option_norm or option_norm in desired_norm):
-            return option, f"matched option from {key or 'answer'}"
-
-    lowered_options = {normalize(option): option for option in options}
-    if (desired_norm in ("yes", "y", "true") or desired_norm.startswith("yes ")) and "yes" in lowered_options:
-        return lowered_options["yes"], "matched yes option"
-    if (desired_norm in ("no", "n", "false") or desired_norm.startswith("no ")) and "no" in lowered_options:
-        return lowered_options["no"], "matched no option"
-
-    return None, "needs review: no matching option"
-
-
-def visible_label_for_element(element: Any) -> str:
-    """Return the single best human-readable label for a form element.
-
-    Prefers real labels (aria-label, <label>, legend, etc.) over machine
-    identifiers (name/id), which on SPA application forms are hashes/React ids.
-    The result is cleaned with clean_prompt_label() so reports stay readable.
-    """
-    raw = element.evaluate(
-        """(el) => {
-          const txt = (node) => (node && node.innerText ? String(node.innerText).trim() : '');
-          // Human-readable sources, in order of preference.
-          const aria = el.getAttribute('aria-label');
-          if (aria && aria.trim()) return aria.trim();
-          if (el.id) {
-            const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-            if (label && txt(label)) return txt(label);
-          }
-          const wrappingLabel = el.closest('label');
-          if (wrappingLabel && txt(wrappingLabel)) return txt(wrappingLabel);
-          const fieldset = el.closest('fieldset');
-          const legend = fieldset && fieldset.querySelector('legend');
-          if (legend && txt(legend)) return txt(legend);
-          const labelledby = el.getAttribute('aria-labelledby');
-          if (labelledby) {
-            const parts = labelledby.split(/\\s+/).map(id => {
-              const n = document.getElementById(id); return n ? txt(n) : '';
-            }).filter(Boolean);
-            if (parts.length) return parts.join(' ');
-          }
-          const sibling = el.previousElementSibling;
-          if (sibling && sibling.tagName && sibling.tagName.toLowerCase() === 'label' && txt(sibling)) {
-            return txt(sibling);
-          }
-          const siblingLabel = sibling && sibling.querySelector ? sibling.querySelector('label') : null;
-          if (siblingLabel && txt(siblingLabel)) return txt(siblingLabel);
-          const placeholder = el.getAttribute('placeholder');
-          if (placeholder && placeholder.trim()) return placeholder.trim();
-          // Last resort: machine identifiers (cleaned on the Python side).
-          return el.getAttribute('name') || el.getAttribute('id') || '';
-        }"""
-    )
-    return clean_prompt_label(raw)
-
-
-# Machine identifiers that leak into SPA form labels and must be stripped.
-_HASH_TOKEN_RE = re.compile(r"\bq_[0-9a-f]{12,}\b", re.IGNORECASE)
-_REACT_ID_RE = re.compile(r":r[0-9a-z]+:", re.IGNORECASE)
-# Hyphenated component names like "rich-text-question-input" or
-# "multi-select-question-0". Requires a hyphen before the keyword so bare English
-# words ("field", "question", "input") are never stripped.
-_FRAMEWORK_TOKEN_RE = re.compile(
-    r"\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b",
-    re.IGNORECASE,
-)
-
-
-def clean_prompt_label(text: Any) -> str:
-    """Strip machine ids/framework noise from a form label for readable display."""
-    value = clean_text(text)
-    if value == NOT_SPECIFIED:
-        return ""
-    value = _HASH_TOKEN_RE.sub(" ", value)
-    value = _REACT_ID_RE.sub(" ", value)
-    value = _FRAMEWORK_TOKEN_RE.sub(" ", value)
-    value = re.sub(r"[-_]{2,}", " ", value)  # collapse stray hyphen/underscore runs
-    value = re.sub(r"\s+", " ", value).strip()
-    # Strip leading junk left by id removal: dashes/colons, then option-index or
-    # duplicated option tokens like "-0 ", "3 3 " that precede the real question.
-    value = re.sub(r"^[\s\-–—:]+", "", value)
-    value = re.sub(r"^(?:-?\d+\s+){1,3}", "", value)
-    value = re.sub(r"^[\s\-–—:]+", "", value)
-    # Drop a trailing required marker.
-    value = re.sub(r"\s*\*\s*$", "", value).strip()
-    return value
-
-
-def group_question_for_element(element: Any) -> str:
-    """Return the group-level question for a checkbox/radio that's one option.
-
-    For a multi-select ("How many shifts…? [ ]3 [ ]4 [ ]5"), each option's own
-    label is just "3"/"4"/"5"; the real question lives on the surrounding group
-    (fieldset legend, role=group aria-label, or a preceding question heading).
-    """
-    raw = element.evaluate(
-        """(el) => {
-          const txt = (n) => (n && n.innerText ? String(n.innerText).trim() : '');
-          const fromContainer = (c) => {
-            if (!c) return '';
-            const aria = c.getAttribute && c.getAttribute('aria-label');
-            if (aria && aria.trim()) return aria.trim();
-            const lb = c.getAttribute && c.getAttribute('aria-labelledby');
-            if (lb) {
-              const parts = lb.split(/\\s+/).map(id => {
-                const x = document.getElementById(id); return x ? txt(x) : '';
-              }).filter(Boolean);
-              if (parts.length) return parts.join(' ');
-            }
-            const legend = c.querySelector && c.querySelector('legend');
-            if (legend && txt(legend)) return txt(legend);
-            return '';
-          };
-          // Only trust a real grouping container (fieldset / role=group) so a
-          // standalone checkbox is never mislabeled with a neighbour's question.
-          const group = el.closest('fieldset, [role="group"], [role="radiogroup"]');
-          return fromContainer(group);
-        }"""
-    )
-    return clean_prompt_label(raw)
-
-
-def dedupe_review_items(items: list) -> list:
-    """Collapse review items that map to the same question (e.g. multi-select options)."""
-    seen: set = set()
-    out: list = []
-    for item in items:
-        base = re.sub(r"\s*\([^)]*\)\s*$", "", str(item)).strip()
-        key = (clean_prompt_label(base) or str(item)).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    return out
 
 
 def is_submit_like(text: str) -> bool:
@@ -966,7 +556,14 @@ def fill_text_controls(page: Any, profile: dict[str, Any], report: dict[str, lis
                 continue
             answer, reason = answer_for_prompt(prompt, profile)
             if not answer:
-                report["needs_review"].append(f"{prompt or 'Unlabeled text field'} ({reason})")
+                add_review_item(
+                    report,
+                    question=prompt,
+                    fallback="Unlabeled text field",
+                    reason=reason,
+                    kind="text",
+                    raw_label=prompt,
+                )
                 continue
             field.fill(answer)
             report["filled"].append(f"{prompt or 'Text field'} -> {reason}")
@@ -992,7 +589,15 @@ def fill_select_controls(page: Any, profile: dict[str, Any], report: dict[str, l
             options = select.locator("option").all_text_contents()
             answer, reason = select_answer_for_prompt(prompt, profile, options)
             if not answer:
-                report["needs_review"].append(f"{prompt or 'Dropdown'} ({reason})")
+                add_review_item(
+                    report,
+                    question=prompt,
+                    fallback="Dropdown",
+                    reason=reason,
+                    kind="select",
+                    raw_label=prompt,
+                    options=options,
+                )
                 continue
             select.select_option(label=answer)
             report["filled"].append(f"{prompt or 'Dropdown'} -> {reason}")
@@ -1041,7 +646,15 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
         options = [label for _, label in options_with_indexes]
         answer, reason = select_answer_for_prompt(prompt, profile, options)
         if not answer:
-            report["needs_review"].append(f"{prompt or group_name} ({reason})")
+            add_review_item(
+                report,
+                question=prompt,
+                fallback=group_name,
+                reason=reason,
+                kind="radio",
+                raw_label=group_name,
+                options=options,
+            )
             continue
         answer_norm = normalize(answer)
         for index, label in options_with_indexes:
@@ -1078,60 +691,37 @@ def inspect_checkbox_controls(page: Any, profile: dict[str, Any], report: dict[s
                 continue  # another option of the same multi-select question
             seen_groups.add(key)
             if is_sensitive_prompt(prompt) or is_legal_prompt(prompt):
-                report["needs_review"].append(f"{prompt or 'Checkbox'} (needs review: sensitive/legal checkbox)")
+                add_review_item(
+                    report,
+                    question=prompt,
+                    fallback="Checkbox",
+                    reason="needs review: sensitive/legal checkbox",
+                    kind="checkbox",
+                    raw_label=prompt,
+                    suggestable=False,
+                )
                 continue
             answer, reason = answer_for_prompt(prompt, profile)
             if answer:
-                report["needs_review"].append(f"{prompt or 'Checkbox'} ({reason}; review before checking)")
+                add_review_item(
+                    report,
+                    question=prompt,
+                    fallback="Checkbox",
+                    reason=f"{reason}; review before checking",
+                    kind="checkbox",
+                    raw_label=prompt,
+                )
             else:
-                report["needs_review"].append(f"{prompt or 'Checkbox'} ({reason})")
+                add_review_item(
+                    report,
+                    question=prompt,
+                    fallback="Checkbox",
+                    reason=reason,
+                    kind="checkbox",
+                    raw_label=prompt,
+                )
         except Exception as exc:
             report["skipped"].append(f"Checkbox {index + 1}: {exc}")
-
-
-def resolve_resume_path(profile: dict[str, Any]) -> Optional[Path]:
-    """Return an existing resume file path from the profile, or None."""
-    raw = clean_text(profile.get("resume_path"))
-    if raw == NOT_SPECIFIED or not raw:
-        return None
-    path = Path(raw).expanduser()
-    return path if path.is_file() else None
-
-
-def resume_path_issue(profile: dict[str, Any]) -> Optional[str]:
-    """Return a user-facing resume_path problem, if one exists."""
-    raw = clean_text(profile.get("resume_path"))
-    if not raw or raw == NOT_SPECIFIED:
-        return "Resume path is not set in applicant_profile.json."
-    if not Path(raw).expanduser().is_file():
-        return f"Resume file missing: {raw}"
-    return None
-
-
-def is_resume_step(surface: Any) -> bool:
-    """Whether the current step appears to be asking for a resume."""
-    text = normalize(safe_page_text(surface, max_chars=4000))
-    return "resume" in text and ("upload" in text or "add" in text or "file" in text)
-
-
-def reveal_resume_upload_input(surface: Any) -> None:
-    """Click an 'Upload a resume' option (never the builder) to expose a file input."""
-    try:
-        controls = surface.locator("a, button, label, [role='button']")
-        for index in range(controls.count()):
-            control = controls.nth(index)
-            try:
-                if not control.is_visible() or not control.is_enabled():
-                    continue
-                label = normalize(control_label(control))
-                if any(pattern in label for pattern in RESUME_UPLOAD_OPTION_PATTERNS):
-                    control.click(timeout=3000)
-                    surface.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
-    except Exception:
-        return
 
 
 def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[str]]) -> int:
@@ -1151,11 +741,25 @@ def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[
     if total == 0:
         if resume_step:
             if raw_path and raw_path != NOT_SPECIFIED:
-                report["needs_review"].append(
-                    f"Resume step: resume file not found at {raw_path} — add a real PDF or fix resume_path"
+                add_review_item(
+                    report,
+                    question="Resume upload",
+                    fallback="Resume upload",
+                    reason=f"resume file not found at {raw_path} — add a real PDF or fix resume_path",
+                    kind="resume",
+                    raw_label="Resume step",
+                    suggestable=False,
                 )
             else:
-                report["needs_review"].append("Resume step: set resume_path in your profile to auto-upload")
+                add_review_item(
+                    report,
+                    question="Resume upload",
+                    fallback="Resume upload",
+                    reason="set resume_path in your profile to auto-upload",
+                    kind="resume",
+                    raw_label="Resume step",
+                    suggestable=False,
+                )
             report["stopped_reason"] = "resume_needs_review"
         return 0
 
@@ -1165,11 +769,25 @@ def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[
             prompt = visible_label_for_element(field) or "Resume upload"
             if resume_path is None:
                 if raw_path and raw_path != NOT_SPECIFIED:
-                    report["needs_review"].append(
-                        f"{prompt}: resume file not found at {raw_path} — add a real PDF or fix resume_path"
+                    add_review_item(
+                        report,
+                        question=prompt,
+                        fallback="Resume upload",
+                        reason=f"resume file not found at {raw_path} — add a real PDF or fix resume_path",
+                        kind="resume",
+                        raw_label=prompt,
+                        suggestable=False,
                     )
                 else:
-                    report["needs_review"].append(f"{prompt}: set resume_path in your profile to auto-upload")
+                    add_review_item(
+                        report,
+                        question=prompt,
+                        fallback="Resume upload",
+                        reason="set resume_path in your profile to auto-upload",
+                        kind="resume",
+                        raw_label=prompt,
+                        suggestable=False,
+                    )
                 continue
             # set_input_files works even when the input is visually hidden.
             field.set_input_files(str(resume_path))
@@ -1177,7 +795,15 @@ def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[
             report["resume_uploaded"] = True
             count += 1
         except Exception as exc:
-            report["needs_review"].append(f"Resume upload: could not attach file ({exc})")
+            add_review_item(
+                report,
+                question="Resume upload",
+                fallback="Resume upload",
+                reason=f"could not attach file ({exc})",
+                kind="resume",
+                raw_label=prompt if 'prompt' in locals() else "Resume upload",
+                suggestable=False,
+            )
             report["stopped_reason"] = "resume_needs_review"
     return count
 
@@ -1186,7 +812,15 @@ def inspect_buttons(page: Any, report: dict[str, list[str]]) -> None:
     """Record submit-like buttons that were intentionally left untouched."""
     for _, label, kind in iter_surface_button_controls(page):
         if kind == "submit":
-            report["needs_review"].append(f"Left final submit button untouched: {label}")
+            add_review_item(
+                report,
+                question=label or "Final submit step",
+                fallback="Final submit step",
+                reason="review and submit it yourself",
+                kind="submit",
+                raw_label=label,
+                suggestable=False,
+            )
             report["status_reason"] = "Reached the final submit step — review and submit it yourself."
             report["stopped_reason"] = "stopped_before_submit"
             add_stage(report, "stopped_before_submit")
@@ -1263,7 +897,15 @@ def try_advance(page: Any, report: dict[str, Any], timeout_ms: int = 8000) -> bo
 
     # Record submit/never buttons we are deliberately leaving alone.
     if any(kind == "submit" for _, _, kind in buttons):
-        report["needs_review"].append("Reached the final submit step — review and submit it yourself.")
+        add_review_item(
+            report,
+            question="Final submit step",
+            fallback="Final submit step",
+            reason="review and submit it yourself",
+            kind="submit",
+            raw_label="Reached the final submit step",
+            suggestable=False,
+        )
         report["status_reason"] = "Reached the final submit step — review and submit it yourself."
         report["stopped_reason"] = "stopped_before_submit"
         add_stage(report, "stopped_before_submit")
@@ -1331,145 +973,57 @@ def find_application_tab(context: Any, job_url: str) -> Optional[Any]:
 
 def persistent_profile_path(data_dir: Path, site: str = "indeed") -> Path:
     """Return the local-only browser profile directory for a job site."""
-    return data_dir / "browser_profiles" / site
+    return autofill_browser.persistent_profile_path(data_dir, site)
 
 
 def find_chrome_executable() -> Optional[str]:
-    """Locate a real Google Chrome / Chromium binary, or None if not installed.
-
-    A real browser profile lets the user log in manually and keep that session
-    available for later review-first autofill runs.
-    """
-    system = platform.system()
-    candidates: list[str] = []
-    if system == "Darwin":
-        candidates += [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ]
-    elif system == "Windows":
-        candidates += [
-            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
-        ]
-    else:  # Linux and others
-        candidates += [
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-        ]
-
-    for path in candidates:
-        if path and Path(path).exists():
-            return path
-    # Fall back to anything on PATH.
-    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
+    """Locate a real Google Chrome / Chromium binary, or None if not installed."""
+    return autofill_browser.find_chrome_executable()
 
 
 def free_debug_port(preferred: int = 9222) -> int:
     """Return an open localhost port, preferring 9222."""
-    for candidate in (preferred, 0):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("127.0.0.1", candidate))
-                return sock.getsockname()[1]
-            except OSError:
-                continue
-    # Last resort: let the OS choose.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    return autofill_browser.free_debug_port(preferred)
 
 
 def cdp_endpoint(debug_port: int) -> str:
     """CDP HTTP endpoint for a given debug port."""
-    return f"http://127.0.0.1:{debug_port}"
+    return autofill_browser.cdp_endpoint(debug_port)
 
 
 def chrome_debug_ready(debug_port: int) -> bool:
     """Whether Chrome's remote-debugging endpoint is responding."""
-    try:
-        with urllib.request.urlopen(f"{cdp_endpoint(debug_port)}/json/version", timeout=1) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, OSError):
-        return False
+    return autofill_browser.chrome_debug_ready(debug_port)
 
 
 def session_metadata_path(user_data_dir: Path) -> Path:
     """Return the ignored file that stores the managed Chrome session metadata."""
-    return user_data_dir / "session.json"
+    return autofill_browser.session_metadata_path(user_data_dir)
 
 
 def save_chrome_session(user_data_dir: Path, debug_port: int) -> dict[str, Any]:
     """Persist the managed Chrome debug port for reconnecting after server restart."""
-    user_data_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "debug_port": debug_port,
-        "profile_path": str(user_data_dir),
-        "created_at": int(time.time()),
-    }
-    with session_metadata_path(user_data_dir).open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2)
-        file.write("\n")
-    return payload
+    return autofill_browser.save_chrome_session(user_data_dir, debug_port)
 
 
 def load_chrome_session(user_data_dir: Path) -> Optional[dict[str, Any]]:
     """Load persisted managed Chrome session metadata, if valid enough to use."""
-    path = session_metadata_path(user_data_dir)
-    if not path.exists():
-        return None
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    try:
-        debug_port = int(payload.get("debug_port"))
-    except (TypeError, ValueError):
-        return None
-    profile_path = clean_text(payload.get("profile_path"))
-    if profile_path and Path(profile_path) != user_data_dir:
-        return None
-    payload["debug_port"] = debug_port
-    return payload
+    return autofill_browser.load_chrome_session(user_data_dir)
 
 
 def chrome_process_uses_profile(debug_port: int, user_data_dir: Path) -> bool:
     """Whether a local Chrome process for debug_port uses this profile directory."""
-    profile = str(user_data_dir)
-    port_arg = f"--remote-debugging-port={debug_port}"
-    try:
-        output = subprocess.check_output(["ps", "ax", "-o", "command="], text=True)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return any(port_arg in line and f"--user-data-dir={profile}" in line for line in output.splitlines())
+    return autofill_browser.chrome_process_uses_profile(debug_port, user_data_dir)
 
 
 def profile_lock_files_exist(user_data_dir: Path) -> bool:
     """Whether Chrome profile lock files are present for the managed profile."""
-    return any((user_data_dir / name).exists() for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"))
+    return autofill_browser.profile_lock_files_exist(user_data_dir)
 
 
 def recover_chrome_session(user_data_dir: Path, preferred_port: int = 9222) -> Optional[dict[str, Any]]:
     """Recover a live managed Chrome session when session.json is missing/stale."""
-    session = load_chrome_session(user_data_dir)
-    if session and chrome_debug_ready(int(session["debug_port"])):
-        return session
-    if chrome_debug_ready(preferred_port) and chrome_process_uses_profile(preferred_port, user_data_dir):
-        session = save_chrome_session(user_data_dir, preferred_port)
-        session["recovered"] = True
-        return session
-    return None
+    return autofill_browser.recover_chrome_session(user_data_dir, preferred_port)
 
 
 def launch_user_chrome(
@@ -1478,67 +1032,25 @@ def launch_user_chrome(
     start_url: Optional[str] = None,
     chrome_path: Optional[str] = None,
     ready_timeout_s: float = 20.0,
-) -> "subprocess.Popen":
+) -> Any:
     """Launch the user's real Chrome as a local process with remote debugging."""
-    chrome = chrome_path or find_chrome_executable()
-    if not chrome:
-        raise RuntimeError(
-            "Google Chrome was not found. Install Chrome to use the autofill "
-            "login flow."
-        )
-    user_data_dir.mkdir(parents=True, exist_ok=True)
-    args = [
-        chrome,
-        f"--remote-debugging-port={debug_port}",
-        f"--user-data-dir={user_data_dir}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--remote-debugging-address=127.0.0.1",
-        start_url or INDEED_LOGIN_URL,
-    ]
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    deadline = time.time() + ready_timeout_s
-    while time.time() < deadline:
-        if chrome_debug_ready(debug_port):
-            return proc
-        if proc.poll() is not None:
-            raise RuntimeError(
-                "Chrome exited before the debugging port became ready. Close the JobFind "
-                "Chrome windows and click Open Indeed Login again."
-            )
-        time.sleep(0.3)
-    raise RuntimeError(
-        "Timed out waiting for Chrome's remote-debugging port. Close the JobFind "
-        "Chrome windows and click Open Indeed Login again."
+    return autofill_browser.launch_user_chrome(
+        user_data_dir,
+        debug_port,
+        start_url=start_url,
+        chrome_path=chrome_path,
+        ready_timeout_s=ready_timeout_s,
     )
 
 
 def connect_user_chrome(pw: Any, debug_port: int) -> tuple[Any, Any]:
-    """Attach Playwright to a running real Chrome over CDP.
-
-    Returns (browser, context). The context is the real Chrome's existing
-    profile context, so it shares the user's logged-in Indeed session.
-    """
-    browser = pw.chromium.connect_over_cdp(cdp_endpoint(debug_port))
-    context = browser.contexts[0] if browser.contexts else browser.new_context()
-    return browser, context
+    """Attach Playwright to a running real Chrome over CDP."""
+    return autofill_browser.connect_user_chrome(pw, debug_port)
 
 
 def open_browser_context(pw: Any, headless: bool, user_data_dir: Optional[Path] = None) -> tuple[Any, Optional[Any]]:
-    """Open a persistent or temporary context (fallback path, not the CDP path)."""
-    channel = "chrome" if find_chrome_executable() else None
-    if user_data_dir:
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-        context = pw.chromium.launch_persistent_context(
-            str(user_data_dir),
-            headless=headless,
-            channel=channel,
-        )
-        return context, None
-
-    browser = pw.chromium.launch(headless=headless, channel=channel)
-    return browser.new_context(), browser
+    """Open a persistent or temporary context."""
+    return autofill_browser.open_browser_context(pw, headless, user_data_dir)
 
 
 def attach_browser_report(
@@ -1550,76 +1062,25 @@ def attach_browser_report(
     user_data_dir: Optional[Path] = None,
 ) -> None:
     """Attach live Playwright handles to a report for review/cleanup."""
-    report["_playwright"] = pw
-    report["_browser"] = browser
-    report["_context"] = context
-    report["_page"] = page
-    if user_data_dir:
-        report["persistent_profile"] = str(user_data_dir)
+    autofill_browser.attach_browser_report(report, pw, context, browser, page, user_data_dir)
 
 
 def close_report_browser(report: dict[str, Any]) -> None:
-    """Close Playwright handles attached to a report, ignoring stale handles.
-
-    Note: `_cdp_browser` (a CDP connection to the user's real Chrome) is left
-    untouched on purpose — only the Playwright connection is stopped so the
-    user's logged-in Chrome and the filled tab stay open for review.
-    """
-    for key in ("_context", "_browser"):
-        handle = report.get(key)
-        if handle is None:
-            continue
-        try:
-            handle.close()
-        except Exception:
-            pass
-    playwright = report.get("_playwright")
-    if playwright is not None:
-        try:
-            playwright.stop()
-        except Exception:
-            pass
-    proc = report.get("_chrome_proc")
-    if proc is not None:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+    """Close Playwright handles attached to a report, ignoring stale handles."""
+    autofill_browser.close_report_browser(report)
 
 
 def start_playwright() -> Any:
     """Import and start Playwright with a helpful install message."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise RuntimeError("Playwright is not installed. Run: make install") from exc
-    return sync_playwright().start()
+    return autofill_browser.start_playwright()
 
 
 def open_indeed_login(
     user_data_dir: Path,
-    headless: bool = False,
     login_url: str = INDEED_LOGIN_URL,
-    timeout_ms: int = 45_000,
 ) -> dict[str, Any]:
     """Launch the user's real Chrome at the Indeed login page for manual login."""
-    report: dict[str, Any] = {
-        "url": login_url,
-        "stages": ["opened_login_page"],
-        "filled": [],
-        "skipped": [],
-        "needs_review": [],
-        "submitted": False,
-        "status_reason": "Log into Indeed in the Chrome window, then return to JobFind and click Resume Autofill.",
-    }
-    debug_port = free_debug_port()
-    proc = launch_user_chrome(user_data_dir, debug_port, start_url=login_url)
-    save_chrome_session(user_data_dir, debug_port)
-    report["_chrome_proc"] = proc
-    report["_debug_port"] = debug_port
-    report["_user_data_dir"] = str(user_data_dir)
-    report["debug_port"] = debug_port
-    return report
+    return autofill_browser.open_indeed_login(user_data_dir, login_url=login_url)
 
 
 def autofill_application(
@@ -1645,6 +1106,9 @@ def autofill_application(
         "filled": [],
         "skipped": [],
         "needs_review": [],
+        "review_items": [],
+        "current_step_needs_review": [],
+        "current_step_review_items": [],
         "submitted": False,
     }
 
@@ -1722,11 +1186,14 @@ def autofill_application(
             if detect_hard_stop(target, report):
                 break
             report["current_action"] = "Filling"
-            review_start = len(report["needs_review"])
+            report["current_step_review_items"] = []
+            report["current_step_needs_review"] = []
+            review_start = len(report["review_items"])
             fill_current_step(target, profile, report)
-            new_review = dedupe_review_items(report["needs_review"][review_start:])
+            new_review = dedupe_review_items(report["review_items"][review_start:])
             if new_review:
-                report["current_step_needs_review"] = new_review
+                report["current_step_review_items"] = new_review
+                sync_legacy_review_strings(report)
                 report["stopped_reason"] = report.get("stopped_reason") or "needs_review"
                 report["status_reason"] = report.get("status_reason") or "Stopped for review before advancing."
                 if report.get("stopped_reason") == "stopped_before_submit":
@@ -1753,10 +1220,12 @@ def autofill_application(
         report["status_reason"] = "Could not reach application form."
         report["stopped_reason"] = "no_application_form"
     report["filled_count"] = len(report["filled"])
-    report["needs_review"] = dedupe_review_items(report["needs_review"])
+    report["review_items"] = dedupe_review_items(report["review_items"])
+    report["current_step_review_items"] = dedupe_review_items(report.get("current_step_review_items", []))
+    sync_legacy_review_strings(report)
     if report["filled"]:
         add_stage(report, "filled_fields")
-    if report["needs_review"]:
+    if report["review_items"]:
         add_stage(report, "needs_review")
     return report
 
