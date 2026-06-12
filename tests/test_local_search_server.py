@@ -99,6 +99,113 @@ class TestApplicationTracking:
         assert error is not None
 
 
+class TestSavedAnswers:
+    def test_save_overlay_answer_writes_json_and_markdown(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        md_file = tmp_path / "saved_answers.md"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_MD_FILE", md_file)
+
+        saved, error = lss.save_overlay_answer(
+            {
+                "question": "Why do you want this job?",
+                "answer": "I want to learn and help customers.",
+                "kind": "text",
+                "source": "edited",
+                "job": {
+                    "title": "Cashier",
+                    "company": "Example Market",
+                    "url": "https://www.indeed.com/viewjob?jk=abc",
+                },
+            }
+        )
+
+        assert error is None
+        assert saved["question"] == "Why do you want this job?"
+        payload = json.loads(json_file.read_text())
+        assert payload["answers"][0]["answer"] == "I want to learn and help customers."
+        markdown = md_file.read_text()
+        assert "Why do you want this job?" in markdown
+        assert "Example Market" in markdown
+
+    def test_save_overlay_answer_updates_existing_question(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        md_file = tmp_path / "saved_answers.md"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_MD_FILE", md_file)
+
+        lss.save_overlay_answer({"question": "Why this job?", "answer": "First answer", "kind": "text"})
+        saved, error = lss.save_overlay_answer({"question": "Why this job?", "answer": "Better answer", "kind": "text"})
+
+        assert error is None
+        assert saved["answer"] == "Better answer"
+        payload = json.loads(json_file.read_text())
+        assert len(payload["answers"]) == 1
+        assert payload["answers"][0]["times_saved"] == 2
+
+    def test_save_overlay_answer_rejects_sensitive_question(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", tmp_path / "saved_answers.json")
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_MD_FILE", tmp_path / "saved_answers.md")
+
+        saved, error = lss.save_overlay_answer(
+            {"question": "What is your Social Security Number?", "answer": "123", "kind": "text"}
+        )
+
+        assert saved is None
+        assert "not safe" in error
+
+    def test_profile_with_saved_answers_hydrates_exact_question_map(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        lss.write_json_file(
+            json_file,
+            {
+                "answers": [
+                    {
+                        "key": "why do you want this job",
+                        "question": "Why do you want this job?",
+                        "answer": "Saved answer",
+                    }
+                ]
+            },
+        )
+
+        profile = lss.profile_with_saved_answers({"short_intro": "Profile answer"})
+
+        assert profile["_saved_answers"] == {"why do you want this job": "Saved answer"}
+
+    def test_overlay_enrichment_prefers_saved_answer_before_ai(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        lss.write_json_file(
+            json_file,
+            {
+                "answers": [
+                    {
+                        "key": "why do you want this job",
+                        "question": "Why do you want this job?",
+                        "answer": "Saved exact answer",
+                    }
+                ]
+            },
+        )
+
+        def fail_ai(payload, **kwargs):
+            raise AssertionError("AI should not be called when a saved answer matches")
+
+        monkeypatch.setattr(lss, "suggest_application_answer", fail_ai)
+        report = {
+            "current_step_review_items": [
+                {"question": "Why do you want this job?", "kind": "text", "suggestable": True}
+            ]
+        }
+
+        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {})
+
+        assert enriched[0]["suggestion"] == "Saved exact answer"
+        assert enriched[0]["suggestion_source"] == "saved answer"
+
+
 class TestApplicantProfile:
     def test_save_profile_updates_trimmed_fields_and_preserves_advanced_data(self, tmp_path, monkeypatch):
         profile_file = tmp_path / "applicant_profile.json"
@@ -249,7 +356,7 @@ class TestCommonAnswers:
     def test_improve_common_answer_uses_ollama_fallback(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(lss, "ollama_available", lambda: True)
-        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt: ({"suggestion": "Better answer", "provider": "ollama"}, 200))
+        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt, **kwargs: ({"suggestion": "Better answer", "provider": "ollama"}, 200))
 
         payload, status = lss.improve_common_answer({"key": "ideal_job", "draft": "I want to learn."})
 
@@ -395,7 +502,7 @@ class TestCommonAnswers:
     def test_suggest_application_answer_uses_ollama_fallback(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(lss, "ollama_available", lambda: True)
-        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt: ({"suggestion": "I do not have formal service experience yet, but I am dependable.", "provider": "ollama"}, 200))
+        monkeypatch.setattr(lss, "call_ollama_polish", lambda prompt, **kwargs: ({"suggestion": "I do not have formal service experience yet, but I am dependable.", "provider": "ollama"}, 200))
 
         payload, status = lss.suggest_application_answer(
             {"question": "Do you have any service experience?", "job": {"title": "Cashier"}}
@@ -413,6 +520,123 @@ class TestCommonAnswers:
 
         assert status == 503
         assert payload["provider"] == "none"
+
+    def test_overlay_enrichment_prefers_common_answers(self, monkeypatch):
+        def fail_ai(payload):
+            raise AssertionError("AI should not be called when a common answer matches")
+
+        monkeypatch.setattr(lss, "suggest_application_answer", fail_ai)
+        item = {
+            "question": "Do you have any service experience?",
+            "kind": "text",
+            "suggestable": True,
+        }
+        report = {"current_step_review_items": [item]}
+
+        enriched = lss.enrich_review_items_for_overlay(
+            report,
+            {"title": "Cashier"},
+            {
+                "custom_answers": {
+                    "Tell us about your customer service experience.": "I help people patiently."
+                }
+            },
+        )
+
+        assert enriched[0]["suggestion"] == "I help people patiently."
+        assert enriched[0]["suggestion_source"].startswith("common answer")
+
+    def test_overlay_enrichment_calls_ai_only_for_suggestable_items(self, monkeypatch):
+        calls = []
+
+        def fake_ai(payload, **kwargs):
+            calls.append(payload)
+            return {"suggestion": "AI answer", "provider": "ollama"}, 200
+
+        monkeypatch.setattr(lss, "suggest_application_answer", fake_ai)
+        report = {
+            "current_step_review_items": [
+                {"question": "Why do you want this job?", "kind": "text", "suggestable": True},
+                {"question": "Social Security Number", "kind": "text", "suggestable": False},
+            ]
+        }
+
+        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {})
+
+        assert len(calls) == 1
+        assert enriched[0]["suggestion"] == "AI answer"
+        assert "suggestion" not in enriched[1]
+
+    def test_overlay_enrichment_keeps_usable_items_without_ai_provider(self, monkeypatch):
+        monkeypatch.setattr(
+            lss,
+            "suggest_application_answer",
+            lambda payload, **kwargs: ({"error": "AI polish is optional. Install Ollama to enable it."}, 503),
+        )
+        report = {
+            "current_step_review_items": [
+                {"question": "Why do you want this job?", "kind": "text", "suggestable": True}
+            ]
+        }
+
+        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {})
+
+        assert enriched[0]["question"] == "Why do you want this job?"
+        assert "Install Ollama" in enriched[0]["suggestion_error"]
+
+    def test_overlay_enrichment_skips_ai_for_radio_select_and_checkbox(self, monkeypatch):
+        def fail_ai(payload, **kwargs):
+            raise AssertionError("AI should not be called for non-text review items")
+
+        monkeypatch.setattr(lss, "suggest_application_answer", fail_ai)
+        report = {
+            "current_step_review_items": [
+                {"question": "Yes/No question on this step", "kind": "radio", "suggestable": False, "options": ["Yes", "No"]},
+                {"question": "Pick a shift", "kind": "select", "suggestable": True, "options": ["Morning", "Evening"]},
+                {"question": "Choose available days", "kind": "checkbox", "suggestable": True, "options": ["Sat", "Sun"]},
+            ]
+        }
+
+        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {})
+
+        assert all("suggestion" not in item for item in enriched)
+
+    def test_overlay_enrichment_caps_auto_ai_suggestions(self, monkeypatch):
+        calls = []
+
+        def fake_ai(payload, **kwargs):
+            calls.append((payload, kwargs))
+            return {"suggestion": f"Answer {len(calls)}", "provider": "ollama"}, 200
+
+        monkeypatch.setattr(lss, "suggest_application_answer", fake_ai)
+        report = {
+            "current_step_review_items": [
+                {"question": "Why do you want this job?", "kind": "text", "suggestable": True},
+                {"question": "What is your ideal job?", "kind": "text", "suggestable": True},
+                {"question": "Tell us about yourself.", "kind": "text", "suggestable": True},
+            ]
+        }
+
+        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {}, ai_limit=2, ollama_timeout=7)
+
+        assert len(calls) == 2
+        assert calls[0][1]["ollama_timeout"] == 7
+        assert enriched[0]["suggestion"] == "Answer 1"
+        assert enriched[1]["suggestion"] == "Answer 2"
+        assert "limited" in enriched[2]["suggestion_error"]
+
+    def test_resource_snapshot_identifies_jobfind_processes(self, monkeypatch):
+        output = """
+        100  4.5  1.2 /usr/bin/python3 pipeline/local_search_server.py
+        101  3.0  2.1 /Applications/Google Chrome --user-data-dir=/Users/warrenjung/project/jobFind/data/browser_profiles/indeed
+        102  2.0 29.0 /Applications/Ollama.app/Contents/Resources/llama-server --model test
+        103  1.0  0.1 /bin/zsh
+        """
+        monkeypatch.setattr(lss.subprocess, "check_output", lambda *args, **kwargs: output)
+
+        rows = lss.jobfind_resource_snapshot()
+
+        assert [row["kind"] for row in rows] == ["python", "managed_chrome", "ollama"]
 
 
 class TestSetupStatus:
@@ -521,6 +745,48 @@ class TestAutofillLoginFlow:
         payload, status = handler.response
         assert status == 400
         assert "valid apply URL" in payload["error"]
+
+    def test_overlay_resume_post_routes_to_resume_autofill(self):
+        class DummyHandler:
+            path = "/api/applications/autofill/overlay-resume"
+
+            def __init__(self):
+                self.called = None
+
+            def read_json_body(self):
+                return {"url": "https://www.indeed.com/viewjob?jk=abc", "title": "Cashier"}, None
+
+            def handle_autofill_request(self, payload, resume=False):
+                self.called = (payload, resume)
+
+            def send_error(self, *args):
+                raise AssertionError(args)
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.do_POST(handler)
+
+        assert handler.called == (
+            {"url": "https://www.indeed.com/viewjob?jk=abc", "title": "Cashier"},
+            True,
+        )
+
+    def test_overlay_resume_cors_allows_indeed_origins(self):
+        class DummyHandler:
+            path = "/api/applications/autofill/overlay-resume"
+            headers = {"Origin": "https://smartapply.indeed.com"}
+
+            def __init__(self):
+                self.headers_sent = []
+
+            def send_header(self, name, value):
+                self.headers_sent.append((name, value))
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.add_overlay_cors_headers(handler)
+
+        assert ("Access-Control-Allow-Origin", "https://smartapply.indeed.com") in handler.headers_sent
 
     def test_latest_login_port_returns_running_chrome(self, monkeypatch):
         class ExitedProc:

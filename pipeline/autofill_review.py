@@ -165,6 +165,11 @@ _FRAMEWORK_TOKEN_RE = re.compile(
     r"\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b",
     re.IGNORECASE,
 )
+_GENERIC_REVIEW_QUESTIONS = {
+    "yes no question on this step",
+    "question on this step",
+    "review this field on the page",
+}
 
 
 def clean_text(value: Any) -> str:
@@ -239,6 +244,22 @@ def common_custom_answer(profile: dict[str, Any], answer_key: str) -> Optional[s
     return None
 
 
+def saved_answers(profile: dict[str, Any]) -> dict[str, str]:
+    """Return normalized question prompt -> remembered answer."""
+    raw = profile.get("_saved_answers")
+    if not isinstance(raw, dict):
+        raw = profile.get("saved_answers")
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for prompt, answer in raw.items():
+        prompt_text = normalize(prompt)
+        answer_text = clean_text(answer)
+        if prompt_text and answer_text != NOT_SPECIFIED:
+            result[prompt_text] = answer_text
+    return result
+
+
 def is_sensitive_prompt(prompt: str) -> bool:
     """Whether a prompt should never be auto-filled."""
     text = normalize(prompt)
@@ -283,6 +304,10 @@ def answer_for_prompt(prompt: str, profile: dict[str, Any]) -> tuple[Optional[st
         if legal_answer:
             return legal_answer, "explicit profile legal/work eligibility answer"
         return None, "needs review: legal/work eligibility question"
+
+    remembered_answer = saved_answers(profile).get(prompt_text)
+    if remembered_answer:
+        return remembered_answer, "saved answer"
 
     for custom_prompt, answer in custom_answers(profile).items():
         if custom_prompt and custom_prompt in prompt_text:
@@ -348,6 +373,32 @@ def clean_prompt_label(text: Any) -> str:
     value = re.sub(r"^[\s\-–—:]+", "", value)
     value = re.sub(r"\s*\*\s*$", "", value).strip()
     return value
+
+
+def is_machine_label(text: Any) -> bool:
+    """Whether a label is only a framework/hash control id."""
+    value = clean_text(text)
+    if not value:
+        return False
+    if clean_prompt_label(value):
+        return False
+    return bool(_HASH_TOKEN_RE.search(value) or _REACT_ID_RE.search(value) or _FRAMEWORK_TOKEN_RE.search(value))
+
+
+def has_yes_no_options(options: Optional[list[str]]) -> bool:
+    """Whether a radio/select option set is basically yes/no."""
+    normalized = {normalize(option) for option in options or [] if normalize(option)}
+    return bool(normalized) and normalized.issubset({"yes", "no", "y", "n", "true", "false"})
+
+
+def fallback_review_question(kind: str, fallback: Any, options: Optional[list[str]] = None) -> str:
+    """Return a readable fallback question when the DOM only exposes ids."""
+    cleaned = clean_prompt_label(fallback) or clean_text(fallback)
+    if cleaned and not is_machine_label(cleaned):
+        return cleaned
+    if normalize(kind) in {"radio", "select"} and has_yes_no_options(options):
+        return "Yes/No question on this step"
+    return "Review this field on the page"
 
 
 def visible_label_for_element(element: Any) -> str:
@@ -422,6 +473,8 @@ def is_suggestable_review_item(item: dict[str, Any]) -> bool:
     reason = normalize(item.get("reason_detail") or item.get("reason"))
     if kind in {"resume", "verification", "login", "submit", "blocked"}:
         return False
+    if question in _GENERIC_REVIEW_QUESTIONS:
+        return False
     if is_sensitive_prompt(question) or is_legal_prompt(question):
         return False
     blocked_terms = ("captcha", "verification", "password", "resume", "submit", "legal", "sensitive")
@@ -437,9 +490,15 @@ def build_review_item(
     raw_label: Any = "",
     options: Optional[list[str]] = None,
     suggestable: Optional[bool] = None,
+    target: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build one structured review item for the autofill report."""
-    cleaned_question = clean_prompt_label(question) or clean_prompt_label(raw_label) or fallback
+    cleaned_options = [clean_text(option) for option in options or [] if clean_text(option) != NOT_SPECIFIED]
+    cleaned_question = (
+        clean_prompt_label(question)
+        or clean_prompt_label(raw_label)
+        or fallback_review_question(kind, fallback, cleaned_options)
+    )
     item = {
         "question": cleaned_question,
         "reason": review_reason_text(reason),
@@ -448,9 +507,10 @@ def build_review_item(
         "raw_label": clean_text(raw_label) or clean_text(question) or cleaned_question,
         "suggestable": False,
     }
-    cleaned_options = [clean_text(option) for option in options or [] if clean_text(option) != NOT_SPECIFIED]
     if cleaned_options:
         item["options"] = cleaned_options
+    if isinstance(target, dict) and target:
+        item["target"] = target
     item["suggestable"] = is_suggestable_review_item(item) if suggestable is None else bool(suggestable)
     item["legacy_text"] = review_item_legacy_text(item)
     return item
@@ -466,6 +526,7 @@ def add_review_item(
     raw_label: Any = "",
     options: Optional[list[str]] = None,
     suggestable: Optional[bool] = None,
+    target: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Append one structured review item to the report."""
     item = build_review_item(
@@ -476,6 +537,7 @@ def add_review_item(
         raw_label=raw_label,
         options=options,
         suggestable=suggestable,
+        target=target,
     )
     report.setdefault("review_items", []).append(item)
     return item
@@ -486,23 +548,57 @@ def group_question_for_element(element: Any) -> str:
     raw = element.evaluate(
         """(el) => {
           const txt = (n) => (n && n.innerText ? String(n.innerText).trim() : '');
+          const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+          const labelText = (node) => clean(txt(node));
+          const optionTexts = new Set(
+            Array.from(document.querySelectorAll(`input[name="${CSS.escape(el.name || '')}"]`))
+              .map(input => labelText(input.closest('label')) || clean(input.value))
+              .filter(Boolean)
+          );
+          const useful = (value) => {
+            const text = clean(value);
+            if (!text) return '';
+            if (/^q_[0-9a-f]{12,}$/i.test(text)) return '';
+            if (/^:?r[0-9a-z]+:?$/i.test(text)) return '';
+            if (optionTexts.has(text)) return '';
+            return text;
+          };
           const fromContainer = (c) => {
             if (!c) return '';
             const aria = c.getAttribute && c.getAttribute('aria-label');
-            if (aria && aria.trim()) return aria.trim();
+            if (useful(aria)) return useful(aria);
             const lb = c.getAttribute && c.getAttribute('aria-labelledby');
             if (lb) {
               const parts = lb.split(/\\s+/).map(id => {
                 const x = document.getElementById(id); return x ? txt(x) : '';
               }).filter(Boolean);
-              if (parts.length) return parts.join(' ');
+              if (useful(parts.join(' '))) return useful(parts.join(' '));
             }
             const legend = c.querySelector && c.querySelector('legend');
-            if (legend && txt(legend)) return txt(legend);
+            if (legend && useful(txt(legend))) return useful(txt(legend));
             return '';
           };
           const group = el.closest('fieldset, [role="group"], [role="radiogroup"]');
-          return fromContainer(group);
+          const grouped = fromContainer(group);
+          if (grouped) return grouped;
+          if (String(el.type || '').toLowerCase() === 'checkbox') return '';
+          const labelledby = el.getAttribute('aria-labelledby');
+          if (labelledby) {
+            const parts = labelledby.split(/\\s+/).map(id => {
+              const x = document.getElementById(id); return x ? txt(x) : '';
+            }).filter(Boolean);
+            if (useful(parts.join(' '))) return useful(parts.join(' '));
+          }
+          let node = el.closest('label') || el;
+          for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+            const heading = node.querySelector && node.querySelector('legend, h1, h2, h3, h4, [data-testid*="question"], [id*="question"], [class*="question"]');
+            if (heading && useful(txt(heading))) return useful(txt(heading));
+            let prev = node.previousElementSibling;
+            for (let hops = 0; prev && hops < 4; hops += 1, prev = prev.previousElementSibling) {
+              if (useful(txt(prev))) return useful(txt(prev));
+            }
+          }
+          return '';
         }"""
     )
     return clean_prompt_label(raw)

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Indeed Apply - Resume Select</title>
+  <style>
+    .step { display: none; }
+    .step.active { display: block; }
+    .selected { outline: 3px solid #0b57d0; }
+  </style>
+</head>
+<body>
+  <section class="step active" id="step1">
+    <h2>Add a resume</h2>
+    <button type="button" id="build-resume">Build an Indeed Resume</button>
+    <button type="button" id="upload-resume" onclick="revealResume()">Upload a resume</button>
+    <div id="resume-slot"></div>
+    <p id="error"></p>
+    <button type="button" id="continue">Continue</button>
+  </section>
+  <section class="step" id="step2">
+    <h2>Next step</h2>
+    <input id="advanced" type="hidden" value="yes">
+  </section>
+  <script>
+    let selected = false;
+    function revealResume() {
+      if (!document.getElementById('resume-file')) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.id = 'resume-file';
+        input.name = 'resume';
+        input.addEventListener('change', () => {
+          const old = document.getElementById('uploaded-card');
+          if (old) old.remove();
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.id = 'uploaded-card';
+          card.textContent = `${input.files[0].name} Uploaded just now`;
+          card.addEventListener('click', () => {
+            selected = true;
+            card.classList.add('selected');
+            document.getElementById('error').textContent = '';
+          });
+          document.getElementById('resume-slot').appendChild(card);
+        });
+        document.getElementById('resume-slot').appendChild(input);
+      }
+    }
+    document.getElementById('continue').addEventListener('click', () => {
+      if (!selected) {
+        document.getElementById('error').textContent = 'Choose an option to continue.';
+        return;
+      }
+      document.getElementById('step1').classList.remove('active');
+      document.getElementById('step2').classList.add('active');
+    });
+  </script>
+</body>
+</html>

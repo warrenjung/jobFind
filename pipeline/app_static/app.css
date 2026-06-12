@@ -448,6 +448,20 @@ textarea { min-height: 74px; resize: vertical; }
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.review-question .inline-suggestion {
+  margin: 0;
+  padding: 8px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: #f5fbf8;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.review-question .inline-warning {
+  color: #8a4b15;
+  overflow-wrap: anywhere;
+}
 .review-question .secondary-button {
   justify-self: end;
   width: fit-content;

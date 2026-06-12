@@ -50,6 +50,19 @@ class TestAnswerMatching:
         assert answer == "Yes, I can get to work reliably."
         assert "custom" in reason
 
+    def test_saved_answer_wins_before_common_answers(self):
+        profile = {
+            **PROFILE,
+            "_saved_answers": {
+                "why do you want to work here": "Saved answer from last application.",
+            },
+        }
+
+        answer, reason = aa.answer_for_prompt("Why do you want to work here?", profile)
+
+        assert answer == "Saved answer from last application."
+        assert reason == "saved answer"
+
     def test_sensitive_question_needs_review(self):
         answer, reason = aa.answer_for_prompt("What is your Social Security Number?", PROFILE)
         assert answer is None
@@ -443,6 +456,29 @@ class TestMultiStepApply:
         finally:
             aa.close_report_browser(report)
 
+    def test_resume_upload_selects_uploaded_card_before_continue(self, tmp_path):
+        pytest.importorskip("playwright.sync_api")
+        resume = tmp_path / "alex_rivera_resume.pdf"
+        resume.write_bytes(b"%PDF-1.4 fake resume\n")
+        fixture = Path(__file__).parent / "fixtures" / "fake_resume_requires_selection.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(),
+            {**PROFILE, "resume_path": str(resume)},
+            headless=True,
+            timeout_ms=15_000,
+        )
+        page = report["_page"]
+        try:
+            assert report["resume_uploaded"] is True
+            assert report["resume_selected"] is True
+            assert "resume_option_selected" in report["stages"] or any(
+                "Uploaded resume option" in item for item in report["filled"]
+            )
+            assert page.locator("#step2").evaluate("(el) => el.classList.contains('active')")
+            assert "Choose an option" not in page.locator("#error").inner_text()
+        finally:
+            aa.close_report_browser(report)
+
     def test_resume_path_issue_names_missing_file(self):
         issue = aa.resume_path_issue({"resume_path": "/tmp/does-not-exist/resume.pdf"})
         assert issue == "Resume file missing: /tmp/does-not-exist/resume.pdf"
@@ -675,3 +711,259 @@ class TestStructuredReviewItems:
 
         assert item["suggestable"] is False
         assert "resume file not found" in item["legacy_text"]
+
+
+class TestYesNoReviewLabels:
+    def test_unlabeled_yes_no_radio_uses_generic_question_not_hash(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_unlabeled_yes_no.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        try:
+            item = report["current_step_review_items"][0]
+            assert item["question"] == "Yes/No question on this step"
+            assert "q_93ba" not in item["question"]
+            assert item["options"] == ["Yes", "No"]
+            assert item["suggestable"] is False
+        finally:
+            aa.close_report_browser(report)
+
+    def test_nearby_yes_no_radio_uses_real_question(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_nearby_yes_no_question.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        try:
+            item = report["current_step_review_items"][0]
+            assert item["question"] == "Can you help with inventory counts?"
+            assert "q_93ba" not in item["question"]
+            assert item["options"] == ["Yes", "No"]
+        finally:
+            aa.close_report_browser(report)
+
+
+class TestReviewOverlay:
+    def test_injects_overlay_with_readable_question_and_suggestion(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = aa.build_review_item(
+                question="q_c05e0398d79935ef9e3661321d291e28 rich-text-question-input-:r2c: What are 3 things you'd look for in an ideal job? *",
+                fallback="Question",
+                reason="needs review: no confident answer",
+                kind="text",
+                target={"kind": "text", "id": "intro"},
+            )
+            item["suggestion"] = "I want a part-time job where I can learn and help customers."
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+
+            overlay = page.locator("#jobfind-review-overlay")
+            assert overlay.is_visible()
+            text = overlay.inner_text()
+            assert "What are 3 things you'd look for in an ideal job?" in text
+            assert "q_c05e" not in text
+            assert "Accept" in text
+            assert report["review_overlay_injected"] is True
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_accept_fills_text_field_from_suggestion(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = aa.build_review_item(
+                question="Why are you interested in this job?",
+                fallback="Question",
+                reason="needs review: no confident answer",
+                kind="text",
+                target={"kind": "text", "id": "intro"},
+            )
+            item["suggestion"] = "I want to learn, help customers, and be part of a dependable team."
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+            page.locator("#intro").fill("")
+            page.locator("#jobfind-review-overlay [data-action='accept']").click()
+
+            assert page.locator("#intro").input_value() == item["suggestion"]
+            assert "Accepted into the field" in page.locator("#jobfind-overlay-status").inner_text()
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_edit_accepts_modified_text(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = aa.build_review_item(
+                question="Why are you interested in this job?",
+                fallback="Question",
+                reason="needs review: no confident answer",
+                kind="text",
+                target={"kind": "text", "id": "intro"},
+            )
+            item["suggestion"] = "Draft answer."
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+            page.locator("#intro").fill("")
+            page.locator("#jobfind-review-overlay [data-action='edit']").click()
+            page.locator("#jobfind-review-overlay textarea").fill("Edited answer for review.")
+            page.locator("#jobfind-review-overlay [data-action='accept-edit']").click()
+
+            assert page.locator("#intro").input_value() == "Edited answer for review."
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_edit_review_highlights_without_filling(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = aa.build_review_item(
+                question="Why are you interested in this job?",
+                fallback="Question",
+                reason="needs review: no confident answer",
+                kind="text",
+                target={"kind": "text", "id": "intro"},
+            )
+            item["suggestion"] = "Draft answer."
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+            page.locator("#intro").fill("")
+            page.locator("#jobfind-review-overlay [data-action='review']").click()
+
+            assert page.locator("#intro").input_value() == ""
+            assert page.locator("#intro").evaluate("(el) => el.classList.contains('jobfind-target-highlight')")
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_accept_selects_yes_no_radio_when_suggestion_matches(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_unlabeled_yes_no.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = report["current_step_review_items"][0]
+            item["suggestion"] = "Yes, I can do that."
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+            page.locator("#jobfind-review-overlay [data-action='accept']").click()
+
+            assert page.locator("input[value='Yes']").is_checked()
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_does_not_show_suggestion_button_for_sensitive_items(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            item = aa.build_review_item(
+                question="Social Security Number",
+                fallback="Sensitive question",
+                reason="needs review: sensitive question",
+                kind="text",
+            )
+            report["stopped_reason"] = "needs_review"
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(page, report)
+
+            text = page.locator("#jobfind-review-overlay").inner_text()
+            assert "Social Security Number" in text
+            assert "Copy suggestion" not in text
+            assert "Accept" not in text
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_hides_copy_question_for_generic_yes_no(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_unlabeled_yes_no.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        try:
+            assert aa.inject_review_overlay(page, report)
+            text = page.locator("#jobfind-review-overlay").inner_text()
+            assert "Yes/No question on this step" in text
+            assert "Choices: Yes, No" in text
+            assert page.locator("#jobfind-review-overlay .jf-reason").inner_text().lower() == "question needs review"
+            assert "Copy question" not in text
+            assert "Copy suggestion" not in text
+            assert "q_93ba" not in text
+        finally:
+            aa.close_report_browser(report)
+
+    def test_overlay_rerun_button_calls_local_resume_endpoint(self):
+        pytest.importorskip("playwright.sync_api")
+        fixture = Path(__file__).parent / "fixtures" / "fake_application.html"
+        report = aa.autofill_application(
+            fixture.resolve().as_uri(), PROFILE, headless=True, timeout_ms=15_000
+        )
+        page = report["_page"]
+        calls = []
+
+        def handle(route):
+            calls.append(route.request.method)
+            route.fulfill(
+                status=200,
+                headers={"Access-Control-Allow-Origin": "*", "Content-Type": "application/json"},
+                body='{"status":"started"}',
+            )
+
+        try:
+            page.route("**/api/applications/autofill/overlay-resume", handle)
+            report["stopped_reason"] = "needs_review"
+            item = aa.build_review_item(
+                question="Why are you interested in this job?",
+                fallback="Question",
+                reason="needs review: no confident answer",
+                kind="text",
+                target={"kind": "text", "id": "intro"},
+            )
+            report["current_step_review_items"] = [item]
+
+            assert aa.inject_review_overlay(
+                page,
+                report,
+                job={"url": "https://www.indeed.com/viewjob?jk=abc", "title": "Cashier"},
+                app_base_url="http://127.0.0.1:7777",
+            )
+            page.locator("#jobfind-review-overlay [data-action='rerun']").click()
+            page.wait_for_function("() => document.querySelector('#jobfind-overlay-status')?.innerText.includes('restarted')", timeout=3000)
+
+            assert "POST" in calls
+        finally:
+            aa.close_report_browser(report)

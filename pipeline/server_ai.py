@@ -225,6 +225,7 @@ def call_ollama_polish(
     model: str,
     setup_message: str,
     requests_mod: Any = requests,
+    timeout: float = 45,
 ) -> tuple[dict[str, str], int]:
     """Call local Ollama for one review-first suggestion."""
     try:
@@ -237,7 +238,7 @@ def call_ollama_polish(
                 "stream": False,
                 "options": {"temperature": 0.2},
             },
-            timeout=45,
+            timeout=timeout,
         )
     except requests.RequestException as exc:
         return {"error": f"Could not reach Ollama: {exc}. {setup_message}"}, 502

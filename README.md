@@ -207,6 +207,12 @@ customer service, and why you want the job. These answers are saved locally in
 `applicant_profile.json` under `custom_answers` and are used by autofill when a
 matching application question appears.
 
+When you use `Accept` or `Accept edit` in the Indeed review helper, JobFind also
+saves that exact non-sensitive question/answer locally. Future autofill runs use
+those exact saved answers before Common Answers or AI. The machine-readable file
+is `data/saved_answers.json`, and the readable notebook is
+`data/saved_answers.md`.
+
 Common Answers can optionally use AI wording help. The recommended free option
 is [Ollama](https://ollama.com), which runs locally on your computer without an
 API key:
@@ -252,6 +258,8 @@ All generated files are written to `data/` (created automatically, gitignored):
 | `data/jobs_clean.md` | Optional raw Markdown table export |
 | `data/jobs_ranked.json` | Detailed ranked list from all sources |
 | `data/applications_status.json` | Local Apply Assistant progress tracker |
+| `data/saved_answers.json` | Local exact-match answer memory for autofill |
+| `data/saved_answers.md` | Readable local answer notebook generated from saved answers |
 | `data/jobs_raw.json` | Raw USAJOBS results |
 | `data/jobs_careeronestop_<city>.json` | Optional raw CareerOneStop API results |
 | `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |

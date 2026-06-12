@@ -210,7 +210,10 @@ function normalizeReviewItem(item) {
       kind: String(item.kind || "question"),
       suggestable: Boolean(item.suggestable),
       rawLabel: String(item.raw_label || ""),
-      options: Array.isArray(item.options) ? item.options : []
+      options: Array.isArray(item.options) ? item.options : [],
+      suggestion: String(item.suggestion || ""),
+      suggestionSource: String(item.suggestion_source || ""),
+      suggestionError: String(item.suggestion_error || "")
     };
   }
   const text = String(item || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
@@ -246,6 +249,9 @@ function renderReviewQuestions(items) {
         <strong>${escapeText(item.reason || "Needs review")}</strong>
         <span>${escapeText(item.question)}</span>
         ${options ? `<small>Choices: ${escapeText(options)}</small>` : ""}
+        ${item.suggestion ? `<p class="inline-suggestion">${escapeText(item.suggestion)}</p>` : ""}
+        ${item.suggestionError ? `<small class="inline-warning">${escapeText(item.suggestionError)}</small>` : ""}
+        ${item.suggestion ? `<button class="secondary-button" type="button" data-copy="${escapeText(item.suggestion)}">Copy suggestion</button>` : ""}
         ${item.suggestable ? `<button class="secondary-button" type="button" data-question-suggest="${index}">Get AI suggestion</button>` : ""}
       </article>
     `;

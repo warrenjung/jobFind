@@ -541,6 +541,40 @@ def reach_application_form(page: Any, report: dict[str, Any], timeout_ms: int) -
     return target
 
 
+def target_for_element(
+    element: Any,
+    kind: str,
+    question: str = "",
+    options: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Return enough metadata for the overlay to safely find the field again."""
+    try:
+        info = element.evaluate(
+            """(el) => ({
+              tag: (el.tagName || '').toLowerCase(),
+              id: el.getAttribute('id') || '',
+              name: el.getAttribute('name') || '',
+              type: el.getAttribute('type') || '',
+              value: el.getAttribute('value') || ''
+            })"""
+        )
+    except Exception:
+        info = {}
+    target = {
+        "kind": kind,
+        "question": clean_text(question),
+        "tag": clean_text(info.get("tag")),
+        "id": clean_text(info.get("id")),
+        "name": clean_text(info.get("name")),
+        "type": clean_text(info.get("type")),
+        "value": clean_text(info.get("value")),
+    }
+    cleaned_options = [clean_text(option) for option in options or [] if clean_text(option)]
+    if cleaned_options:
+        target["options"] = cleaned_options
+    return {key: value for key, value in target.items() if value}
+
+
 def fill_text_controls(page: Any, profile: dict[str, Any], report: dict[str, list[str]]) -> int:
     """Fill visible text inputs and textareas."""
     count = 0
@@ -563,6 +597,7 @@ def fill_text_controls(page: Any, profile: dict[str, Any], report: dict[str, lis
                     reason=reason,
                     kind="text",
                     raw_label=prompt,
+                    target=target_for_element(field, "text", prompt),
                 )
                 continue
             field.fill(answer)
@@ -597,6 +632,7 @@ def fill_select_controls(page: Any, profile: dict[str, Any], report: dict[str, l
                     kind="select",
                     raw_label=prompt,
                     options=options,
+                    target=target_for_element(select, "select", prompt, options=options),
                 )
                 continue
             select.select_option(label=answer)
@@ -613,6 +649,7 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
     radios = page.locator("input[type='radio']")
     groups: dict[str, list[tuple[int, str]]] = {}
     prompts: dict[str, str] = {}
+    targets: dict[str, dict[str, Any]] = {}
     for index in range(radios.count()):
         radio = radios.nth(index)
         try:
@@ -638,6 +675,11 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
             )
             prompts.setdefault(name, prompt)
             groups.setdefault(name, []).append((index, option))
+            targets.setdefault(name, target_for_element(radio, "radio", prompt))
+            targets[name]["options"] = [
+                {"index": radio_index, "label": label, "value": clean_text(radios.nth(radio_index).get_attribute("value"))}
+                for radio_index, label in groups[name]
+            ]
         except Exception as exc:
             report["skipped"].append(f"Radio option {index + 1}: {exc}")
 
@@ -654,6 +696,7 @@ def fill_radio_controls(page: Any, profile: dict[str, Any], report: dict[str, li
                 kind="radio",
                 raw_label=group_name,
                 options=options,
+                target=targets.get(group_name),
             )
             continue
         answer_norm = normalize(answer)
@@ -699,6 +742,7 @@ def inspect_checkbox_controls(page: Any, profile: dict[str, Any], report: dict[s
                     kind="checkbox",
                     raw_label=prompt,
                     suggestable=False,
+                    target=target_for_element(checkbox, "checkbox", prompt),
                 )
                 continue
             answer, reason = answer_for_prompt(prompt, profile)
@@ -710,6 +754,7 @@ def inspect_checkbox_controls(page: Any, profile: dict[str, Any], report: dict[s
                     reason=f"{reason}; review before checking",
                     kind="checkbox",
                     raw_label=prompt,
+                    target=target_for_element(checkbox, "checkbox", prompt),
                 )
             else:
                 add_review_item(
@@ -719,6 +764,7 @@ def inspect_checkbox_controls(page: Any, profile: dict[str, Any], report: dict[s
                     reason=reason,
                     kind="checkbox",
                     raw_label=prompt,
+                    target=target_for_element(checkbox, "checkbox", prompt),
                 )
         except Exception as exc:
             report["skipped"].append(f"Checkbox {index + 1}: {exc}")
@@ -793,6 +839,9 @@ def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[
             field.set_input_files(str(resume_path))
             report["filled"].append(f"{prompt} -> uploaded {resume_path.name}")
             report["resume_uploaded"] = True
+            report["resume_filename"] = resume_path.name
+            if select_uploaded_resume_option(page, resume_path.name, report):
+                report["resume_selected"] = True
             count += 1
         except Exception as exc:
             add_review_item(
@@ -806,6 +855,79 @@ def fill_file_inputs(page: Any, profile: dict[str, Any], report: dict[str, list[
             )
             report["stopped_reason"] = "resume_needs_review"
     return count
+
+
+def select_uploaded_resume_option(surface: Any, resume_filename: str, report: Optional[dict[str, Any]] = None) -> bool:
+    """Select an uploaded resume card when the site requires choosing it before Continue."""
+    filename = normalize(resume_filename)
+    if not filename:
+        return False
+    deny = ("build indeed resume", "resume options", "delete resume", "remove resume")
+    selectors = (
+        "button, label, [role='button'], [tabindex]",
+        "article, section, div",
+    )
+    try:
+        for selector in selectors:
+            controls = surface.locator(selector)
+            limit = min(controls.count(), 80)
+            for index in range(limit):
+                control = controls.nth(index)
+                try:
+                    if not control.is_visible():
+                        continue
+                    text = normalize(control.inner_text(timeout=500) or control.get_attribute("aria-label") or "")
+                    if not text or any(bad in text for bad in deny):
+                        continue
+                    looks_uploaded = filename in text or ("uploaded" in text and "resume" in text)
+                    if not looks_uploaded:
+                        continue
+                    control.click(timeout=2500)
+                    surface.wait_for_timeout(500)
+                    if report is not None:
+                        report.setdefault("filled", []).append("Uploaded resume option -> selected")
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        return False
+    return False
+
+
+def page_has_resume_choice_error(surface: Any) -> bool:
+    """Whether the current resume step is asking the user to choose an option."""
+    try:
+        text = normalize(surface.locator("body").inner_text(timeout=1000))
+    except Exception:
+        return False
+    return "choose an option to continue" in text or "select an option to continue" in text
+
+
+def try_click_continue_again_after_resume_selection(page: Any, report: dict[str, Any], before: str, timeout_ms: int) -> bool:
+    """Retry Continue after selecting an uploaded resume card."""
+    filename = clean_text(report.get("resume_filename"))
+    if not filename or not select_uploaded_resume_option(page, filename, report):
+        return False
+    buttons = iter_button_controls(page)
+    advance = next(((el, label) for el, label, kind in buttons if kind == "advance"), None)
+    if advance is None:
+        return False
+    element, label = advance
+    try:
+        element.click(timeout=5000)
+    except Exception as exc:
+        report["skipped"].append(f"Retry advance button '{label}': {exc}")
+        return False
+    retry_deadline = page.evaluate("() => Date.now()") + min(timeout_ms, 8_000)
+    while page.evaluate("() => Date.now()") < retry_deadline:
+        if step_fingerprint(page) != before:
+            report.setdefault("advanced_steps", []).append(label)
+            report["current_action"] = "Advancing"
+            add_stage(report, "advanced_step")
+            add_stage(report, "resume_option_selected")
+            return True
+        page.wait_for_timeout(400)
+    return False
 
 
 def inspect_buttons(page: Any, report: dict[str, list[str]]) -> None:
@@ -933,6 +1055,23 @@ def try_advance(page: Any, report: dict[str, Any], timeout_ms: int = 8000) -> bo
             add_stage(report, "advanced_step")
             return True
         page.wait_for_timeout(400)
+    if report.get("resume_uploaded") and is_resume_step(page):
+        filename = clean_text(report.get("resume_filename"))
+        if filename and select_uploaded_resume_option(page, filename, report):
+            try:
+                element.click(timeout=5000)
+            except Exception as exc:
+                report["skipped"].append(f"Retry advance button '{label}': {exc}")
+                return False
+            retry_deadline = page.evaluate("() => Date.now()") + min(timeout_ms, 8_000)
+            while page.evaluate("() => Date.now()") < retry_deadline:
+                if step_fingerprint(page) != before:
+                    report.setdefault("advanced_steps", []).append(label)
+                    report["current_action"] = "Advancing"
+                    add_stage(report, "advanced_step")
+                    add_stage(report, "resume_option_selected")
+                    return True
+                page.wait_for_timeout(400)
     return False
 
 
@@ -1081,6 +1220,404 @@ def open_indeed_login(
 ) -> dict[str, Any]:
     """Launch the user's real Chrome at the Indeed login page for manual login."""
     return autofill_browser.open_indeed_login(user_data_dir, login_url=login_url)
+
+
+def overlay_review_items(report: dict[str, Any], review_items: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """Return the review items that should be shown in the in-page helper."""
+    items = review_items or report.get("current_step_review_items") or report.get("review_items") or []
+    clean_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        question = clean_text(item.get("question")) or clean_text(item.get("legacy_text"))
+        if not question:
+            continue
+        options = [clean_text(option) for option in item.get("options", []) if clean_text(option)]
+        generic_question = normalize(question) in {
+            "yes no question on this step",
+            "question on this step",
+            "review this field on the page",
+        }
+        reason = clean_text(item.get("reason")) or "Needs review"
+        if generic_question and options:
+            reason = "Question needs review"
+        out = {
+            "question": question,
+            "reason": reason,
+            "kind": clean_text(item.get("kind")) or "question",
+            "suggestable": bool(item.get("suggestable")),
+            "options": options,
+            "copy_question": not generic_question,
+            "target": item.get("target") if isinstance(item.get("target"), dict) else {},
+            "suggestion": clean_text(item.get("suggestion")),
+            "suggestion_source": clean_text(item.get("suggestion_source")),
+            "suggestion_error": clean_text(item.get("suggestion_error")),
+        }
+        out["can_accept"] = bool(out["target"] and out["suggestion"])
+        out["can_edit"] = bool(out["target"] and out["suggestable"])
+        clean_items.append(out)
+    return clean_items
+
+
+def should_show_review_overlay(report: dict[str, Any]) -> bool:
+    """Whether an autofill stop is useful to surface directly on the Indeed page."""
+    reason = clean_text(report.get("stopped_reason"))
+    stages = set(report.get("stages") or [])
+    return reason in {"needs_review", "resume_needs_review", "verification_required", "stopped_before_submit"} or bool(
+        stages & {"needs_review", "verification_required", "stopped_before_submit"}
+    )
+
+
+def inject_review_overlay(
+    page: Any,
+    report: dict[str, Any],
+    review_items: Optional[list[dict[str, Any]]] = None,
+    job: Optional[dict[str, Any]] = None,
+    app_base_url: str = "http://127.0.0.1:8000",
+) -> bool:
+    """Inject a static JobFind review helper into the visible application page."""
+    if page is None or not should_show_review_overlay(report):
+        return False
+    items = overlay_review_items(report, review_items)
+    if not items and report.get("stopped_reason") not in {"verification_required", "stopped_before_submit"}:
+        return False
+    payload = {
+        "title": "JobFind review helper",
+        "summary": clean_text(report.get("status_reason")) or "Review these fields, then return to JobFind and resume.",
+        "safety": "Review everything yourself. JobFind will not submit applications.",
+        "items": items,
+        "job": job or {},
+        "app_base_url": app_base_url.rstrip("/"),
+    }
+    try:
+        page.evaluate(
+            """(payload) => {
+              const old = document.getElementById('jobfind-review-overlay');
+              if (old) old.remove();
+              const escape = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+              }[ch]));
+              const panel = document.createElement('section');
+              panel.id = 'jobfind-review-overlay';
+              panel.setAttribute('aria-label', 'JobFind review helper');
+              panel.innerHTML = `
+                <style>
+                  #jobfind-review-overlay {
+                    position: fixed; z-index: 2147483647; right: 18px; top: 18px;
+                    width: min(390px, calc(100vw - 36px)); max-height: calc(100vh - 36px);
+                    overflow: auto; background: #fbfdfc; color: #14201f;
+                    border: 1px solid #c9d8d5; border-radius: 8px;
+                    box-shadow: 0 18px 50px rgba(15, 43, 38, 0.22);
+                    font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                  }
+                  #jobfind-review-overlay * { box-sizing: border-box; }
+                  #jobfind-review-overlay header {
+                    position: sticky; top: 0; background: #fbfdfc; padding: 14px 14px 10px;
+                    border-bottom: 1px solid #d9e4e1; display: flex; gap: 10px; align-items: start;
+                  }
+                  #jobfind-review-overlay h2 { margin: 0; font-size: 16px; line-height: 1.2; }
+                  #jobfind-review-overlay .jf-muted { color: #536461; margin: 4px 0 0; font-size: 12px; }
+                  #jobfind-review-overlay .jf-body { padding: 12px 14px 14px; display: grid; gap: 10px; }
+                  #jobfind-review-overlay .jf-card {
+                    border: 1px solid #d5e0dd; border-radius: 8px; background: #ffffff; padding: 11px;
+                    display: grid; gap: 8px;
+                  }
+                  #jobfind-review-overlay .jf-reason {
+                    width: fit-content; border-radius: 999px; padding: 3px 8px; background: #e7f2ef;
+                    color: #0c4b43; font-size: 11px; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: .02em;
+                  }
+                  #jobfind-review-overlay .jf-question { margin: 0; font-weight: 700; color: #152624; }
+                  #jobfind-review-overlay .jf-options, #jobfind-review-overlay .jf-suggestion, #jobfind-review-overlay .jf-error {
+                    margin: 0; color: #435552; font-size: 13px;
+                  }
+                  #jobfind-review-overlay .jf-suggestion {
+                    border-left: 3px solid #18776b; padding: 7px 8px; background: #f2faf7; color: #183532;
+                  }
+                  #jobfind-review-overlay .jf-error { color: #8a4b15; }
+                  #jobfind-review-overlay .jf-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+                  #jobfind-review-overlay .jf-editor { display: none; gap: 7px; }
+                  #jobfind-review-overlay .jf-editor.jf-open { display: grid; }
+                  #jobfind-review-overlay textarea {
+                    width: 100%; min-height: 90px; resize: vertical; border: 1px solid #b8cbc7;
+                    border-radius: 7px; padding: 8px; font: inherit; color: #14201f; background: #fff;
+                  }
+                  #jobfind-review-overlay .jf-status { margin: 0; color: #536461; font-size: 12px; }
+                  #jobfind-review-overlay button {
+                    appearance: none; border: 1px solid #b8cbc7; border-radius: 7px; background: #fff;
+                    color: #0b4d45; padding: 7px 9px; font: inherit; font-weight: 700; cursor: pointer;
+                  }
+                  #jobfind-review-overlay button.jf-primary { background: #0b6f63; color: #fff; border-color: #0b6f63; }
+                  #jobfind-review-overlay button:hover { background: #eef7f4; }
+                  #jobfind-review-overlay button.jf-primary:hover { background: #095c52; }
+                  #jobfind-review-overlay .jf-toggle { margin-left: auto; padding: 5px 8px; }
+                  .jobfind-target-highlight {
+                    outline: 3px solid #0b6f63 !important; outline-offset: 3px !important;
+                    box-shadow: 0 0 0 6px rgba(11, 111, 99, 0.14) !important;
+                  }
+                  #jobfind-review-overlay.jf-collapsed { max-height: none; overflow: visible; }
+                  #jobfind-review-overlay.jf-collapsed .jf-body, #jobfind-review-overlay.jf-collapsed .jf-summary { display: none; }
+                  @media (max-width: 700px) {
+                    #jobfind-review-overlay { left: 10px; right: 10px; top: 10px; width: auto; }
+                  }
+                </style>
+                <header>
+                  <div>
+                    <h2>${escape(payload.title)}</h2>
+                    <p class="jf-muted jf-summary">${escape(payload.summary)}</p>
+                    <p class="jf-muted jf-summary">${escape(payload.safety)}</p>
+                  </div>
+                  <button class="jf-toggle" type="button" aria-expanded="true">Collapse</button>
+                </header>
+                <div class="jf-body">
+                  ${payload.items.length ? payload.items.map((item, index) => `
+                    <article class="jf-card">
+                      <span class="jf-reason">${escape(item.reason || 'Needs review')}</span>
+                    <p class="jf-question">${escape(item.question)}</p>
+                    ${item.options && item.options.length ? `<p class="jf-options">Choices: ${escape(item.options.slice(0, 8).join(', '))}</p>` : ''}
+                    ${item.suggestion_source ? `<p class="jf-options">${escape(item.suggestion_source === 'saved answer' ? 'Used saved answer' : `Suggestion source: ${item.suggestion_source}`)}</p>` : ''}
+                    ${item.suggestion ? `<p class="jf-suggestion">${escape(item.suggestion)}</p>` : ''}
+                    ${item.suggestion_error ? `<p class="jf-error">${escape(item.suggestion_error)}</p>` : ''}
+                    <div class="jf-editor" data-editor="${index}">
+                      <textarea>${escape(item.suggestion || '')}</textarea>
+                      <div class="jf-actions">
+                        <button class="jf-primary" type="button" data-action="accept-edit" data-index="${index}">Accept edit</button>
+                        <button type="button" data-action="cancel-edit" data-index="${index}">Cancel</button>
+                      </div>
+                    </div>
+                      <div class="jf-actions">
+                        ${item.can_accept ? `<button class="jf-primary" type="button" data-action="accept" data-index="${index}">Accept</button>` : ''}
+                        ${item.can_edit ? `<button type="button" data-action="edit" data-index="${index}">Edit</button>` : ''}
+                        ${item.can_edit ? `<button type="button" data-action="review" data-index="${index}">Edit + Review</button>` : ''}
+                        ${item.copy_question ? `<button type="button" data-copy="${index}" data-copy-kind="question">Copy question</button>` : ''}
+                        ${item.suggestion && !item.can_accept ? `<button type="button" data-copy="${index}" data-copy-kind="suggestion">Copy suggestion</button>` : ''}
+                      </div>
+                    </article>
+                  `).join('') : `
+                    <article class="jf-card">
+                      <span class="jf-reason">Manual step</span>
+                      <p class="jf-question">${escape(payload.summary)}</p>
+                    </article>
+                  `}
+                  <div class="jf-actions">
+                    <button class="jf-primary" type="button" data-action="rerun">Rerun Autofill</button>
+                  </div>
+                  <p class="jf-status" id="jobfind-overlay-status">After you handle this in Indeed, return to JobFind or click Rerun Autofill.</p>
+                </div>
+              `;
+              document.documentElement.appendChild(panel);
+              const norm = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+              const cssEscape = (value) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(String(value)) : String(value).replace(/"/g, '\\"');
+              const status = (message) => {
+                const el = panel.querySelector('#jobfind-overlay-status');
+                if (el) el.textContent = message;
+              };
+              const dispatchInput = (el) => {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              };
+              const clearHighlights = () => {
+                document.querySelectorAll('.jobfind-target-highlight').forEach((el) => el.classList.remove('jobfind-target-highlight'));
+              };
+              const findTargets = (item) => {
+                const target = item.target || {};
+                const byId = target.id ? document.getElementById(target.id) : null;
+                const selector = target.name ? `[name="${cssEscape(target.name)}"]` : '';
+                const byName = selector ? Array.from(document.querySelectorAll(selector)) : [];
+                if (item.kind === 'radio') return byName.length ? byName : (byId ? [byId] : []);
+                if (byId) return [byId];
+                return byName;
+              };
+              const highlightTarget = (item) => {
+                clearHighlights();
+                const targets = findTargets(item);
+                const first = targets.find((el) => el && el.isConnected);
+                if (!first) return false;
+                targets.forEach((el) => el.classList.add('jobfind-target-highlight'));
+                first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                try { first.focus({ preventScroll: true }); } catch (_) {}
+                return true;
+              };
+              const chooseOption = (options, value) => {
+                const wanted = norm(value);
+                if (!wanted) return null;
+                const startsYes = wanted === 'yes' || wanted.startsWith('yes ');
+                const startsNo = wanted === 'no' || wanted.startsWith('no ');
+                return options.find((option) => {
+                  const label = norm(option.text || option.label || option.value);
+                  const raw = norm(option.value);
+                  if (startsYes && (label === 'yes' || raw === 'yes')) return true;
+                  if (startsNo && (label === 'no' || raw === 'no')) return true;
+                  return label && (wanted === label || wanted.includes(label) || label.includes(wanted));
+                }) || null;
+              };
+              const fillTarget = (item, value) => {
+                const targets = findTargets(item);
+                if (!targets.length) return { ok: false, message: 'Could not find that field on the page.' };
+                if (!value || !String(value).trim()) return { ok: false, message: 'Write an answer first.' };
+                const kind = item.kind;
+                if (kind === 'text') {
+                  const el = targets[0];
+                  if (!('value' in el)) return { ok: false, message: 'That field cannot be filled automatically.' };
+                  el.value = value;
+                  dispatchInput(el);
+                  highlightTarget(item);
+                  return { ok: true, message: 'Accepted into the field. Review it before continuing.' };
+                }
+                if (kind === 'select') {
+                  const el = targets[0];
+                  const option = chooseOption(Array.from(el.options || []), value);
+                  if (!option) return { ok: false, message: 'Could not match that answer to a dropdown choice.' };
+                  el.value = option.value;
+                  dispatchInput(el);
+                  highlightTarget(item);
+                  return { ok: true, message: 'Selected the matching choice. Review it before continuing.' };
+                }
+                if (kind === 'radio') {
+                  const option = chooseOption(targets.map((el) => ({
+                    value: el.value,
+                    text: el.closest('label')?.innerText || el.value,
+                    element: el,
+                  })), value);
+                  if (!option || !option.element) return { ok: false, message: 'Could not safely match that answer to Yes/No.' };
+                  option.element.checked = true;
+                  dispatchInput(option.element);
+                  highlightTarget(item);
+                  return { ok: true, message: 'Selected the matching option. Review it before continuing.' };
+                }
+                if (kind === 'checkbox') {
+                  const wanted = norm(value);
+                  if (!(wanted === 'yes' || wanted.startsWith('yes ') || wanted === 'true' || wanted.startsWith('check'))) {
+                    return { ok: false, message: 'Checkboxes need manual review unless the answer clearly says yes.' };
+                  }
+                  targets[0].checked = true;
+                  dispatchInput(targets[0]);
+                  highlightTarget(item);
+                  return { ok: true, message: 'Checked the box. Review it before continuing.' };
+                }
+                return { ok: false, message: 'This item cannot be filled automatically.' };
+              };
+              const editorFor = (index) => panel.querySelector(`[data-editor="${index}"]`);
+              const openEditor = (index, review = false) => {
+                const item = payload.items[Number(index)] || {};
+                const editor = editorFor(index);
+                if (!editor) return;
+                editor.classList.add('jf-open');
+                const textarea = editor.querySelector('textarea');
+                if (textarea && !textarea.value) textarea.value = item.suggestion || '';
+                if (textarea) textarea.focus();
+                if (review) {
+                  const found = highlightTarget(item);
+                  status(found ? 'Review the highlighted field, edit the answer, then Accept edit.' : 'Edit the answer here, then copy it manually if needed.');
+                } else {
+                  status('Edit the answer, then choose Accept edit.');
+                }
+              };
+              const copyText = async (text, button) => {
+                try {
+                  await navigator.clipboard.writeText(text);
+                  const old = button.textContent;
+                  button.textContent = 'Copied';
+                  setTimeout(() => { button.textContent = old; }, 1000);
+                } catch (_) {
+                  button.textContent = 'Copy failed';
+                }
+              };
+              const saveAnswer = async (item, answer, source) => {
+                try {
+                  const response = await fetch(`${payload.app_base_url}/api/saved-answers`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      item,
+                      question: item.question,
+                      answer,
+                      kind: item.kind,
+                      source,
+                      job: payload.job || {},
+                    }),
+                  });
+                  if (response.ok) {
+                    status('Accepted into the field. Saved for next time.');
+                  } else {
+                    const body = await response.json().catch(() => ({}));
+                    status(body.error || 'Accepted into the field, but could not save the answer.');
+                  }
+                } catch (_) {
+                  status('Accepted into the field, but could not reach JobFind to save it.');
+                }
+              };
+              panel.addEventListener('click', (event) => {
+                const toggle = event.target.closest('.jf-toggle');
+                if (toggle) {
+                  const collapsed = panel.classList.toggle('jf-collapsed');
+                  toggle.textContent = collapsed ? 'Expand' : 'Collapse';
+                  toggle.setAttribute('aria-expanded', String(!collapsed));
+                  return;
+                }
+                const actionButton = event.target.closest('[data-action]');
+                if (actionButton) {
+                  const action = actionButton.dataset.action;
+                  const index = actionButton.dataset.index;
+                  const item = payload.items[Number(index)] || {};
+                  if (action === 'accept') {
+                    const result = fillTarget(item, item.suggestion || '');
+                    status(result.message);
+                    if (result.ok) saveAnswer(item, item.suggestion || '', 'accepted');
+                    return;
+                  }
+                  if (action === 'edit') {
+                    openEditor(index, false);
+                    return;
+                  }
+                  if (action === 'review') {
+                    openEditor(index, true);
+                    return;
+                  }
+                  if (action === 'accept-edit') {
+                    const editor = editorFor(index);
+                    const textarea = editor ? editor.querySelector('textarea') : null;
+                    const answer = textarea ? textarea.value : '';
+                    const result = fillTarget(item, answer);
+                    status(result.message);
+                    if (result.ok) saveAnswer(item, answer, 'edited');
+                    return;
+                  }
+                  if (action === 'cancel-edit') {
+                    const editor = editorFor(index);
+                    if (editor) editor.classList.remove('jf-open');
+                    status('Edit canceled.');
+                    return;
+                  }
+                  if (action === 'rerun') {
+                    status('Restarting autofill in JobFind...');
+                    fetch(`${payload.app_base_url}/api/applications/autofill/overlay-resume`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload.job || {}),
+                    }).then((response) => {
+                      status(response.ok ? 'Autofill restarted in JobFind.' : 'Could not restart autofill from the overlay.');
+                    }).catch(() => {
+                      status('Could not reach JobFind. Use Resume Autofill in the local app.');
+                    });
+                    return;
+                  }
+                }
+                const button = event.target.closest('[data-copy]');
+                if (!button) return;
+                const item = payload.items[Number(button.dataset.copy)] || {};
+                const text = button.dataset.copyKind === 'suggestion' ? item.suggestion : item.question;
+                copyText(text || '', button);
+              });
+            }""",
+            payload,
+        )
+        report["review_overlay_injected"] = True
+        add_stage(report, "review_overlay_injected")
+        return True
+    except Exception as exc:
+        report.setdefault("skipped", []).append(f"Review overlay injection: {exc}")
+        return False
 
 
 def autofill_application(

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 import application_autofill
 import requests
+import saved_answers
 import server_ai
 import server_profile
 
@@ -31,6 +32,8 @@ PIPELINE_SCRIPT = REPO_ROOT / "pipeline" / "run_job_pipeline.py"
 RESULTS_FILE = DATA_DIR / "jobs_clean.html"
 PROFILE_FILE = REPO_ROOT / "applicant_profile.json"
 APPLICATIONS_FILE = DATA_DIR / "applications_status.json"
+SAVED_ANSWERS_FILE = DATA_DIR / "saved_answers.json"
+SAVED_ANSWERS_MD_FILE = DATA_DIR / "saved_answers.md"
 INDEED_PROFILE_DIR = application_autofill.persistent_profile_path(DATA_DIR, "indeed")
 
 DEFAULT_HOST = "127.0.0.1"
@@ -39,6 +42,7 @@ DEFAULT_LOCATION = "Cupertino, CA"
 DEFAULT_RADIUS = "10"
 DEFAULT_MODE = "fast"
 DEFAULT_MIN_SCORE = "50"
+APP_BASE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 
 RADIUS_CHOICES = {"5", "10", "15", "25", "35", "50"}
 RADIUS_ORDER = ["5", "10", "15", "25", "35", "50"]
@@ -54,6 +58,8 @@ STATIC_FILES = {
 MODE_CHOICES = {"fast", "full"}
 FAST_QUERIES = ["cashier", "retail associate", "barista"]
 MAX_LOG_LINES = 240
+AUTO_OVERLAY_AI_LIMIT = 2
+AUTO_OVERLAY_AI_TIMEOUT = 12
 APPLICATION_STATUSES = {
     "Not started",
     "Opened",
@@ -223,6 +229,56 @@ def report_needs_login(report: dict[str, Any]) -> bool:
     return "login_required" in stages or "login" in reason or "verification" in reason
 
 
+def jobfind_resource_snapshot(limit: int = 8) -> list[dict[str, Any]]:
+    """Return a read-only snapshot of JobFind-related local processes."""
+    try:
+        output = subprocess.check_output(["ps", "-axo", "pid=,pcpu=,pmem=,command="], text=True)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    markers = (
+        "data/browser_profiles/indeed",
+        "local_search_server.py",
+        "run_job_pipeline.py",
+        "scrape_indeed.py",
+        "ollama",
+        "llama-server",
+    )
+    for line in output.splitlines():
+        if not any(marker in line for marker in markers):
+            continue
+        parts = line.strip().split(None, 3)
+        if len(parts) < 4:
+            continue
+        pid, cpu, mem, command = parts
+        kind = "other"
+        lowered = command.lower()
+        if "ollama" in lowered or "llama-server" in lowered:
+            kind = "ollama"
+        elif "data/browser_profiles/indeed" in command:
+            kind = "managed_chrome"
+        elif "python" in lowered:
+            kind = "python"
+        try:
+            cpu_value = float(cpu)
+            mem_value = float(mem)
+        except ValueError:
+            cpu_value = 0.0
+            mem_value = 0.0
+        rows.append(
+            {
+                "pid": pid,
+                "cpu": cpu_value,
+                "mem": mem_value,
+                "kind": kind,
+                "command": command[:220],
+            }
+        )
+    rows.sort(key=lambda row: row["cpu"], reverse=True)
+    return rows[:limit]
+
+
 def latest_login_port() -> Optional[int]:
     """Return the debug port of the latest still-running Indeed login Chrome."""
     global SESSION_RECOVERY_MESSAGE
@@ -272,7 +328,7 @@ def run_autofill(job: dict[str, str], resume: bool = False) -> None:
             AUTOFILL_STATE.append_log("Resuming with the saved Indeed browser profile.")
         else:
             AUTOFILL_STATE.append_log("Using the saved Indeed browser profile when available.")
-        profile = load_applicant_profile()
+        profile = profile_with_saved_answers(load_applicant_profile())
         resume_issue = application_autofill.resume_path_issue(profile)
         if resume_issue:
             AUTOFILL_STATE.append_log(resume_issue)
@@ -286,6 +342,9 @@ def run_autofill(job: dict[str, str], resume: bool = False) -> None:
                 SESSION_RECOVERY_MESSAGE
                 or "No logged-in Chrome found. Click Open Indeed Login first, sign in, then run autofill again."
             )
+        resources = jobfind_resource_snapshot()
+        if any(row.get("kind") == "ollama" for row in resources):
+            AUTOFILL_STATE.append_log("Ollama is running locally and may slow the laptop while generating suggestions.")
         report = application_autofill.autofill_application(
             job["url"],
             profile,
@@ -293,6 +352,15 @@ def run_autofill(job: dict[str, str], resume: bool = False) -> None:
             user_data_dir=INDEED_PROFILE_DIR,
             cdp_port=cdp_port,
         )
+        enriched_items = enrich_review_items_for_overlay(report, job, profile)
+        if application_autofill.inject_review_overlay(
+            report.get("_page"),
+            report,
+            enriched_items,
+            job=job,
+            app_base_url=APP_BASE_URL,
+        ):
+            AUTOFILL_STATE.append_log("Added JobFind review helper to the Indeed page.")
         LIVE_AUTOFILL_REPORTS.append(report)
         public = application_autofill.public_report(report)
         filled_count = int(public.get("filled_count") or 0)
@@ -351,6 +419,27 @@ def write_json_file(path: Path, payload: Any) -> None:
 def load_applicant_profile() -> dict[str, Any]:
     """Load local applicant profile fields for copy/paste assistance."""
     return server_profile.load_profile(PROFILE_FILE, read_json_file)
+
+
+def load_saved_answers() -> dict[str, Any]:
+    """Load local saved-answer memory."""
+    return saved_answers.read_saved_answers(SAVED_ANSWERS_FILE)
+
+
+def profile_with_saved_answers(profile: dict[str, Any]) -> dict[str, Any]:
+    """Attach saved answer memory to the profile used by autofill."""
+    hydrated = dict(profile)
+    hydrated["_saved_answers"] = saved_answers.saved_answer_map(load_saved_answers())
+    return hydrated
+
+
+def save_overlay_answer(payload: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Save an accepted/edited overlay answer for future exact-match reuse."""
+    return saved_answers.upsert_saved_answer(
+        SAVED_ANSWERS_FILE,
+        SAVED_ANSWERS_MD_FILE,
+        payload,
+    )
 
 
 def profile_missing_fields(profile: dict[str, Any]) -> list[str]:
@@ -545,7 +634,7 @@ def call_openai_polish(prompt: str) -> tuple[dict[str, str], int]:
     )
 
 
-def call_ollama_polish(prompt: str) -> tuple[dict[str, str], int]:
+def call_ollama_polish(prompt: str, timeout: float = 45) -> tuple[dict[str, str], int]:
     """Call local Ollama for one review-first suggestion."""
     return server_ai.call_ollama_polish(
         prompt,
@@ -553,16 +642,17 @@ def call_ollama_polish(prompt: str) -> tuple[dict[str, str], int]:
         ollama_model(),
         OLLAMA_SETUP_MESSAGE,
         requests,
+        timeout=timeout,
     )
 
 
-def suggest_with_configured_provider(prompt: str) -> tuple[dict[str, str], int]:
+def suggest_with_configured_provider(prompt: str, ollama_timeout: float = 45) -> tuple[dict[str, str], int]:
     """Route a prompt through the configured AI provider order."""
     provider = ai_provider_status()
     if provider["provider"] == "openai":
         return call_openai_polish(prompt)
     if provider["provider"] == "ollama":
-        return call_ollama_polish(prompt)
+        return call_ollama_polish(prompt, timeout=ollama_timeout)
     return {"error": provider["message"], "provider": "none"}, 503
 
 
@@ -574,12 +664,73 @@ def improve_common_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]
     return suggest_with_configured_provider(prompt)
 
 
-def suggest_application_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
+def suggest_application_answer(payload: dict[str, Any], ollama_timeout: float = 45) -> tuple[dict[str, str], int]:
     """Return a review-first answer suggestion for an application question."""
     prompt, error = build_question_suggestion_prompt(payload, load_applicant_profile())
     if error:
         return {"error": error}, 400
-    return suggest_with_configured_provider(prompt)
+    return suggest_with_configured_provider(prompt, ollama_timeout=ollama_timeout)
+
+
+def common_answer_suggestion_for_item(item: dict[str, Any], profile: dict[str, Any]) -> tuple[str, str]:
+    """Return a saved Common Answer suggestion for a review item, if one matches."""
+    question = clean_payload_text(item.get("question"), 1000)
+    if not question:
+        return "", ""
+    remembered = saved_answers.saved_answer_map(load_saved_answers()).get(saved_answers.normalize_question(question))
+    if remembered:
+        return remembered, "saved answer"
+    answer, reason = application_autofill.answer_for_prompt(question, profile)
+    if answer and (reason == "saved answer" or reason == "custom answer" or reason.startswith("common answer")):
+        return answer, reason
+    return "", ""
+
+
+def enrich_review_items_for_overlay(
+    report: dict[str, Any],
+    job: dict[str, Any],
+    profile: dict[str, Any],
+    ai_limit: int = AUTO_OVERLAY_AI_LIMIT,
+    ollama_timeout: float = AUTO_OVERLAY_AI_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """Add copy-ready suggestions to review items before injecting the page overlay."""
+    items = report.get("current_step_review_items") or report.get("review_items") or []
+    if not isinstance(items, list):
+        return []
+
+    ai_calls = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        common_answer, common_reason = common_answer_suggestion_for_item(item, profile)
+        if common_answer:
+            item["suggestion"] = common_answer
+            item["suggestion_source"] = common_reason
+            continue
+        if not item.get("suggestable"):
+            continue
+        if clean_payload_text(item.get("kind"), 80).lower() != "text":
+            continue
+        if ai_calls >= ai_limit:
+            item["suggestion_error"] = "AI suggestions were limited to keep JobFind responsive."
+            continue
+        ai_calls += 1
+        payload, status = suggest_application_answer(
+            {
+                "question": item.get("question"),
+                "review_item": item,
+                "job": job,
+            },
+            ollama_timeout=ollama_timeout,
+        )
+        if status == 200 and payload.get("suggestion"):
+            item["suggestion"] = payload["suggestion"]
+            item["suggestion_source"] = payload.get("provider") or "ai"
+            if payload.get("model"):
+                item["suggestion_model"] = payload["model"]
+        elif payload.get("error"):
+            item["suggestion_error"] = payload["error"]
+    return items
 
 
 def load_application_records() -> dict[str, dict[str, Any]]:
@@ -771,6 +922,17 @@ def run_pipeline(location: str, command: list[str]) -> None:
 class SearchHandler(BaseHTTPRequestHandler):
     """HTTP routes for the local JobFind app."""
 
+    def do_OPTIONS(self) -> None:
+        path = urlparse(self.path).path
+        if path in {"/api/applications/autofill/overlay-resume", "/api/saved-answers"}:
+            self.send_response(204)
+            self.add_overlay_cors_headers()
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+            return
+        self.send_error(404, "Not found")
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in STATIC_FILES:
@@ -799,6 +961,9 @@ class SearchHandler(BaseHTTPRequestHandler):
                 reverse=True,
             )
             self.send_json({"applications": rows})
+            return
+        if path == "/api/saved-answers":
+            self.send_json(load_saved_answers())
             return
         if path == "/api/autofill/status":
             payload = AUTOFILL_STATE.snapshot()
@@ -853,6 +1018,17 @@ class SearchHandler(BaseHTTPRequestHandler):
             result, status = suggest_application_answer(payload)
             self.send_json(result, status=status)
             return
+        if path == "/api/saved-answers":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            saved, save_error = save_overlay_answer(payload)
+            if save_error:
+                self.send_json({"error": save_error}, status=400)
+                return
+            self.send_json({"saved_answer": saved})
+            return
         if path == "/api/applications/open":
             payload, error = self.read_json_body()
             if error:
@@ -888,6 +1064,13 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.handle_autofill_request(payload, resume=False)
             return
         if path == "/api/applications/autofill/resume":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            self.handle_autofill_request(payload, resume=True)
+            return
+        if path == "/api/applications/autofill/overlay-resume":
             payload, error = self.read_json_body()
             if error:
                 self.send_json({"error": error}, status=400)
@@ -998,11 +1181,28 @@ class SearchHandler(BaseHTTPRequestHandler):
     def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         content = json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        self.add_overlay_cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
+
+    def add_overlay_cors_headers(self) -> None:
+        """Allow only the injected Indeed overlay to call narrow helper endpoints."""
+        path = urlparse(self.path).path
+        if path not in {"/api/applications/autofill/overlay-resume", "/api/saved-answers"}:
+            return
+        origin = self.headers.get("Origin", "")
+        allowed = (
+            origin.startswith("https://www.indeed.com")
+            or origin.startswith("https://smartapply.indeed.com")
+            or origin.startswith("https://apply.indeed.com")
+            or origin.startswith("file://")
+        )
+        if allowed:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
 
     def send_text(
         self,
@@ -1024,11 +1224,13 @@ class SearchHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global APP_BASE_URL
     parser = argparse.ArgumentParser(description="Run the local JobFind browser app.")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
 
+    APP_BASE_URL = f"http://{args.host}:{args.port}"
     server = ThreadingHTTPServer((args.host, args.port), SearchHandler)
     print(f"JobFind local app: http://{args.host}:{args.port}")
     print("Press Ctrl+C to stop.")
