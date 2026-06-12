@@ -22,7 +22,7 @@ import re
 import sys
 from typing import Any, Optional
 
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED
 
 COLUMNS = [
     "title",

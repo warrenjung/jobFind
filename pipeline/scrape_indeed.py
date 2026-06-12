@@ -37,7 +37,7 @@ SEARCH_QUERIES = [
     "entry level no experience",
 ]
 
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED, clean_text
 
 # Rotated per query so consecutive searches don't share one fingerprint.
 USER_AGENTS = [
@@ -128,15 +128,6 @@ def is_schedule(line: str) -> bool:
         "sunday",
     )
     return any(k in line.lower() for k in keywords)
-
-
-def clean_text(value: Optional[str]) -> str:
-    """Normalize browser text into one-line CSV/JSON-safe text."""
-    if not value:
-        return NOT_SPECIFIED
-    text = value.replace("\xa0", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text or NOT_SPECIFIED
 
 
 def classify_attributes(attributes: list[str]) -> tuple[str, str, str]:

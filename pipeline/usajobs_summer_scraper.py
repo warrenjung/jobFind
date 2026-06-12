@@ -25,7 +25,7 @@ DEFAULT_NUM_RESULTS = 25
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_raw.json")
 DEFAULT_CREDENTIALS_FILE = str(_REPO_ROOT / "usajobs_credentials.json")
 TEMPORARY_APPOINTMENT_CODE = "15317"
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED
 
 
 def value_or_default(value: Any, default: str = NOT_SPECIFIED) -> Any:

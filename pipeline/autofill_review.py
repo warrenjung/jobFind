@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED
 
 LEGAL_PATTERNS = (
     "authorized to work",

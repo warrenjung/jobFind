@@ -32,7 +32,7 @@ DEFAULT_INDEED_FILE = str(DATA_DIR / "indeed_jobs_cupertino.csv")
 DEFAULT_CAREERONESTOP_FILE = ""
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED, parse_float
 
 
 GOOD_KEYWORDS = {
@@ -148,14 +148,6 @@ def clean_value(value: Any) -> str:
         return NOT_SPECIFIED
     text = str(value).strip()
     return text if text else NOT_SPECIFIED
-
-
-def parse_float(value: Any) -> Optional[float]:
-    """Parse numeric API values without treating placeholders as numbers."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def load_usajobs(filename: str) -> list[dict[str, Any]]:

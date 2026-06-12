@@ -17,18 +17,11 @@ import export_clean_template
 DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_INPUT_FILE = DATA_DIR / "jobs_ranked.json"
 DEFAULT_OUTPUT_FILE = DATA_DIR / "jobs_clean.html"
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED, clean_text
 DESCRIPTION_LIMIT = 220
 DEFAULT_MIN_SCORE = 50
 
 
-def clean_text(value: Any) -> str:
-    """Normalize generated job values for display."""
-    if value is None:
-        return NOT_SPECIFIED
-    text = str(value).replace("\xa0", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text if text else NOT_SPECIFIED
 
 
 def truncate(text: str, max_length: int = DESCRIPTION_LIMIT) -> str:

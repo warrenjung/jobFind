@@ -38,10 +38,7 @@ CAREERONESTOP_SCRAPER = _HERE / "careeronestop_scraper.py"
 CLEAN_TABLE_EXPORTER = _HERE / "export_clean_table.py"
 
 
-def slugify_location(location: str) -> str:
-    """Convert a location into a safe filename slug."""
-    slug = re.sub(r"[^a-z0-9]+", "_", location.lower()).strip("_")
-    return slug or "location"
+from utils import slugify_location
 
 
 def city_slug_from_location(location: str) -> str:

@@ -27,7 +27,7 @@ DEFAULT_RADIUS = 10
 DEFAULT_RESULTS = 25
 DEFAULT_DAYS = 30
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_careeronestop.json")
-NOT_SPECIFIED = "Not specified"
+from utils import NOT_SPECIFIED, clean_text, parse_float, slugify_location
 
 SEARCH_KEYWORDS = [
     "cashier",
@@ -42,29 +42,6 @@ SEARCH_KEYWORDS = [
     "lifeguard",
     "crew",
 ]
-
-
-def clean_text(value: Any) -> str:
-    """Normalize API strings for JSON output."""
-    if value is None:
-        return NOT_SPECIFIED
-    text = str(value).replace("\xa0", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text if text else NOT_SPECIFIED
-
-
-def parse_float(value: Any) -> Optional[float]:
-    """Parse numeric API values without treating placeholders as numbers."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def slugify_location(location: str) -> str:
-    """Convert a location into a safe filename slug."""
-    slug = re.sub(r"[^a-z0-9]+", "_", location.lower()).strip("_")
-    return slug or "location"
 
 
 def load_local_credentials(filename: str = DEFAULT_CREDENTIALS_FILE) -> dict[str, str]:
