@@ -67,9 +67,16 @@ const profileFieldDefs = [
   { key: "short_intro", label: "Short intro", multiline: true }
 ];
 
+async function fetchJson(url, options) {
+  const response = await fetch(url, options || { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Request to ${url} failed (${response.status})`);
+  }
+  return response.json();
+}
+
 async function refreshStatus() {
-  const response = await fetch("/api/status", { cache: "no-store" });
-  const data = await response.json();
+  const data = await fetchJson("/api/status");
   statusText.textContent = data.status.toUpperCase();
   statusDetail.textContent = data.location ? `Location: ${data.location}` : "Ready to search.";
   logs.textContent = data.logs || "";
@@ -336,8 +343,7 @@ async function openProfileEditor(focusName) {
 }
 
 async function loadProfile() {
-  const response = await fetch("/api/applicant-profile", { cache: "no-store" });
-  const profile = await response.json();
+  const profile = await fetchJson("/api/applicant-profile");
   currentProfile = profile;
   renderProfileForm(currentProfile);
   const rows = Object.entries(profile).filter(([, value]) => profileValueText(value).trim());
@@ -375,8 +381,7 @@ async function saveProfile(event) {
 }
 
 async function loadApplications() {
-  const response = await fetch("/api/applications", { cache: "no-store" });
-  const payload = await response.json();
+  const payload = await fetchJson("/api/applications");
   const rows = payload.applications || [];
   applicationList.innerHTML = rows.length
     ? rows.slice(0, 8).map(row => `
@@ -404,8 +409,7 @@ function renderSelectedJob(record) {
 }
 
 async function refreshAutofillStatus() {
-  const response = await fetch("/api/autofill/status", { cache: "no-store" });
-  const data = await response.json();
+  const data = await fetchJson("/api/autofill/status");
   const report = data.report || {};
   const filled = report.filled_count || 0;
   const stages = report.stages || [];
@@ -657,6 +661,8 @@ async function loadConfig() {
     }
     const minScore = form && form.querySelector('[name="min_score"]');
     if (minScore && !minScore.value) minScore.value = (cfg.default_min_score ?? "");
-  } catch (e) { /* ignore config errors */ }
+  } catch (e) {
+    console.warn("Could not load /api/config defaults:", e);
+  }
 }
 loadConfig();

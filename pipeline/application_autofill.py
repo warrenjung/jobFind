@@ -5,6 +5,8 @@ The live autofill path opens a visible Playwright browser and fills obvious
 fields from applicant_profile.json. It intentionally never submits forms.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re

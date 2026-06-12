@@ -1140,7 +1140,10 @@ class SearchHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length > 1_000_000:
             return {}, "Request body is too large."
-        raw_body = self.rfile.read(length).decode("utf-8")
+        try:
+            raw_body = self.rfile.read(length).decode("utf-8")
+        except UnicodeDecodeError:
+            return {}, "Request body must be UTF-8 encoded."
         try:
             payload = json.loads(raw_body or "{}")
         except json.JSONDecodeError:
