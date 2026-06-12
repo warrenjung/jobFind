@@ -75,76 +75,6 @@ def freshness_label(fromage: int) -> str:
     return NOT_SPECIFIED
 
 
-def parse_cards(page_text: str, location: str) -> list[dict]:
-    """
-    Fallback parser for plain page text.
-
-    The live scraper uses DOM extraction in scrape_with_playwright(), which is
-    more reliable. Keep this only as a debugging fallback if selectors break.
-    """
-    cards = []
-    # Split on job key links to find individual cards
-    # The page text won't have URLs, so we use heuristics on the raw text
-    lines = [l.strip() for l in page_text.splitlines() if l.strip()]
-    i = 0
-    while i < len(lines):
-        # Heuristic: a title line is followed by company / location block
-        # We look for lines that look like job titles (mixed case, not too long)
-        line = lines[i]
-        if is_likely_title(line) and i + 2 < len(lines):
-            title = line
-            company = lines[i + 1] if i + 1 < len(lines) else NOT_SPECIFIED
-            loc = lines[i + 2] if i + 2 < len(lines) else location
-            pay = NOT_SPECIFIED
-            job_type = NOT_SPECIFIED
-            schedule = NOT_SPECIFIED
-            snippet_parts = []
-            posted = NOT_SPECIFIED
-            j = i + 3
-            while j < len(lines) and j < i + 12:
-                l2 = lines[j]
-                if is_pay_line(l2):
-                    pay = l2
-                elif is_job_type(l2):
-                    job_type = l2
-                elif is_schedule(l2):
-                    schedule = l2
-                elif is_posted_line(l2):
-                    posted = l2
-                    j += 1
-                    break
-                else:
-                    snippet_parts.append(l2)
-                j += 1
-            snippet = " ".join(snippet_parts)[:300] if snippet_parts else NOT_SPECIFIED
-            cards.append({
-                "title": title,
-                "company": company,
-                "location": loc,
-                "pay": pay,
-                "job_type": job_type,
-                "schedule_hours": schedule,
-                "date_posted": posted,
-                "description_snippet": snippet,
-                "job_url": NOT_SPECIFIED,  # will be enriched from DOM
-            })
-            i = j
-        else:
-            i += 1
-    return cards
-
-
-def is_likely_title(line: str) -> bool:
-    if len(line) > 80 or len(line) < 3:
-        return False
-    # Titles are typically title-cased or mixed-case, not all-caps sentences
-    if line.isupper() and len(line) > 20:
-        return False
-    if line.startswith(("$", "http", "Posted", "Apply", "Easy", "New", "Hiring")):
-        return False
-    return bool(re.match(r"[A-Z]", line))
-
-
 # Matches a real pay phrase, e.g. "$18.70 an hour", "$21 - $25 an hour",
 # "From $18.45 an hour", "$50,000 - $60,000 a year". A pay-unit suffix is
 # required so stray "$" tokens inside CSS/JS/config blobs are not mistaken
@@ -175,10 +105,6 @@ def extract_pay(text: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
-def is_pay_line(line: str) -> bool:
-    return extract_pay(line) is not None
-
-
 def is_job_type(line: str) -> bool:
     keywords = ("full-time", "part-time", "contract", "temporary", "internship")
     return any(k in line.lower() for k in keywords)
@@ -202,10 +128,6 @@ def is_schedule(line: str) -> bool:
         "sunday",
     )
     return any(k in line.lower() for k in keywords)
-
-
-def is_posted_line(line: str) -> bool:
-    return bool(re.search(r"(just posted|\d+ days? ago|\d+ hours? ago)", line, re.I))
 
 
 def clean_text(value: Optional[str]) -> str:

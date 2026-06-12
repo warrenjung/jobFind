@@ -894,42 +894,6 @@ def select_uploaded_resume_option(surface: Any, resume_filename: str, report: Op
     return False
 
 
-def page_has_resume_choice_error(surface: Any) -> bool:
-    """Whether the current resume step is asking the user to choose an option."""
-    try:
-        text = normalize(surface.locator("body").inner_text(timeout=1000))
-    except Exception:
-        return False
-    return "choose an option to continue" in text or "select an option to continue" in text
-
-
-def try_click_continue_again_after_resume_selection(page: Any, report: dict[str, Any], before: str, timeout_ms: int) -> bool:
-    """Retry Continue after selecting an uploaded resume card."""
-    filename = clean_text(report.get("resume_filename"))
-    if not filename or not select_uploaded_resume_option(page, filename, report):
-        return False
-    buttons = iter_button_controls(page)
-    advance = next(((el, label) for el, label, kind in buttons if kind == "advance"), None)
-    if advance is None:
-        return False
-    element, label = advance
-    try:
-        element.click(timeout=5000)
-    except Exception as exc:
-        report["skipped"].append(f"Retry advance button '{label}': {exc}")
-        return False
-    retry_deadline = page.evaluate("() => Date.now()") + min(timeout_ms, 8_000)
-    while page.evaluate("() => Date.now()") < retry_deadline:
-        if step_fingerprint(page) != before:
-            report.setdefault("advanced_steps", []).append(label)
-            report["current_action"] = "Advancing"
-            add_stage(report, "advanced_step")
-            add_stage(report, "resume_option_selected")
-            return True
-        page.wait_for_timeout(400)
-    return False
-
-
 def inspect_buttons(page: Any, report: dict[str, list[str]]) -> None:
     """Record submit-like buttons that were intentionally left untouched."""
     for _, label, kind in iter_surface_button_controls(page):
