@@ -3,6 +3,7 @@
 import io
 import json
 
+import autofill_browser as ab
 import local_search_server as lss
 
 
@@ -357,6 +358,40 @@ class TestCommonAnswers:
         assert prompt == ""
         assert "should not be answered by AI" in error
 
+    def test_question_suggestion_accepts_structured_review_item(self):
+        prompt, error = lss.build_question_suggestion_prompt(
+            {
+                "review_item": {
+                    "question": "Do you have any service experience?",
+                    "kind": "text",
+                    "suggestable": True,
+                },
+                "job": {"title": "Cashier"},
+            },
+            {
+                "short_intro": "I am dependable.",
+                "custom_answers": {"Tell us about your customer service experience.": "I help people patiently."},
+            },
+        )
+
+        assert error is None
+        assert "Do you have any service experience?" in prompt
+
+    def test_question_suggestion_rejects_unsuggestable_review_item(self):
+        prompt, error = lss.build_question_suggestion_prompt(
+            {
+                "review_item": {
+                    "question": "Resume upload",
+                    "kind": "resume",
+                    "suggestable": False,
+                }
+            },
+            {},
+        )
+
+        assert prompt == ""
+        assert "should not be answered by AI" in error
+
     def test_suggest_application_answer_uses_ollama_fallback(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setattr(lss, "ollama_available", lambda: True)
@@ -369,6 +404,15 @@ class TestCommonAnswers:
         assert status == 200
         assert payload["provider"] == "ollama"
         assert "dependable" in payload["suggestion"]
+
+    def test_suggest_with_configured_provider_returns_disabled_message(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(lss, "ollama_available", lambda: False)
+
+        payload, status = lss.suggest_with_configured_provider("hello")
+
+        assert status == 503
+        assert payload["provider"] == "none"
 
 
 class TestSetupStatus:
@@ -501,11 +545,12 @@ class TestAutofillLoginFlow:
 
         assert lss.latest_login_port() == 9444
 
-    def test_latest_login_port_none_when_endpoint_dead(self, monkeypatch):
+    def test_latest_login_port_none_when_endpoint_dead(self, tmp_path, monkeypatch):
         class RunningProc:
             def poll(self):
                 return None
 
+        monkeypatch.setattr(lss, "INDEED_PROFILE_DIR", tmp_path / "indeed")
         monkeypatch.setattr(
             lss.application_autofill, "chrome_debug_ready", lambda port: False
         )
@@ -517,7 +562,7 @@ class TestAutofillLoginFlow:
 
     def test_latest_login_port_uses_saved_session_after_restart(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / "indeed"
-        lss.application_autofill.save_chrome_session(profile_dir, 9555)
+        ab.save_chrome_session(profile_dir, 9555)
         monkeypatch.setattr(lss, "INDEED_PROFILE_DIR", profile_dir)
         monkeypatch.setattr(lss, "LIVE_LOGIN_REPORTS", [])
         monkeypatch.setattr(lss.application_autofill, "chrome_debug_ready", lambda port: port == 9555)
@@ -526,7 +571,7 @@ class TestAutofillLoginFlow:
 
     def test_latest_login_port_ignores_dead_saved_session(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / "indeed"
-        lss.application_autofill.save_chrome_session(profile_dir, 9555)
+        ab.save_chrome_session(profile_dir, 9555)
         monkeypatch.setattr(lss, "INDEED_PROFILE_DIR", profile_dir)
         monkeypatch.setattr(lss, "LIVE_LOGIN_REPORTS", [])
         monkeypatch.setattr(lss.application_autofill, "chrome_debug_ready", lambda port: False)
@@ -537,16 +582,16 @@ class TestAutofillLoginFlow:
         profile_dir = tmp_path / "indeed"
         monkeypatch.setattr(lss, "INDEED_PROFILE_DIR", profile_dir)
         monkeypatch.setattr(lss, "LIVE_LOGIN_REPORTS", [])
-        monkeypatch.setattr(lss.application_autofill, "chrome_debug_ready", lambda port: port == 9222)
+        monkeypatch.setattr(ab, "chrome_debug_ready", lambda port: port == 9222)
         monkeypatch.setattr(
-            lss.application_autofill,
+            ab,
             "chrome_process_uses_profile",
             lambda port, path: port == 9222 and path == profile_dir,
         )
 
         assert lss.latest_login_port() == 9222
         assert lss.SESSION_RECOVERY_MESSAGE == "Recovered existing JobFind Chrome session."
-        assert lss.application_autofill.load_chrome_session(profile_dir)["debug_port"] == 9222
+        assert ab.load_chrome_session(profile_dir)["debug_port"] == 9222
 
     def test_latest_login_port_reports_profile_lock_without_debug_endpoint(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / "indeed"

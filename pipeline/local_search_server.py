@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, urlparse
 
 import application_autofill
 import requests
+import server_ai
+import server_profile
 
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -85,12 +87,7 @@ PROFILE_EDIT_FIELDS = [
     "short_intro",
 ]
 PROFILE_REQUIRED_LABELS = {
-    "name": "name",
-    "email": "email",
-    "phone": "phone",
-    "city": "city",
-    "state": "state",
-    "availability": "availability",
+    **server_profile.DEFAULT_PROFILE_REQUIRED_LABELS
 }
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_OPENAI_MODEL = "gpt-5.1-mini"
@@ -101,39 +98,10 @@ OLLAMA_SETUP_MESSAGE = (
     "`ollama pull llama3.2:3b`, start Ollama, then try again."
 )
 COMMON_ANSWER_FIELDS = [
-    ("ideal_job", "Ideal job", "What does your ideal job look like?"),
-    ("availability", "Availability", "When are you available to work?"),
-    ("transportation", "Transportation", "Do you have reliable transportation?"),
-    ("why_this_company", "Why this company", "Why do you want to work here?"),
-    ("customer_service", "Customer service", "Tell us about your customer service experience."),
-    ("teamwork", "Teamwork", "Tell us about a time you worked on a team."),
-    ("extra_notes", "Extra notes", "Anything else an employer should know?"),
+    *server_profile.DEFAULT_COMMON_ANSWER_FIELDS
 ]
 COMMON_ANSWER_ALIASES = {
-    "ideal_job": (
-        "What are 3 things you'd look for in an ideal job?",
-        "What are you looking for in a job?",
-    ),
-    "availability": (
-        "Are you available weekends?",
-        "How many hours per week can you work?",
-    ),
-    "transportation": (
-        "Do you have reliable transportation?",
-    ),
-    "why_this_company": (
-        "Why are you interested in this job?",
-        "Why are you interested in this company?",
-    ),
-    "customer_service": (
-        "Tell us about your customer service experience.",
-    ),
-    "teamwork": (
-        "Tell us about a time you worked on a team.",
-    ),
-    "extra_notes": (
-        "Anything else an employer should know?",
-    ),
+    **server_profile.DEFAULT_COMMON_ANSWER_ALIASES
 }
 
 
@@ -286,7 +254,7 @@ def run_open_indeed_login() -> None:
     """Open a persistent visible browser so the user can log into Indeed."""
     try:
         LOGIN_STATE.append_log("Opening visible Indeed login browser.")
-        report = application_autofill.open_indeed_login(INDEED_PROFILE_DIR, headless=False)
+        report = application_autofill.open_indeed_login(INDEED_PROFILE_DIR)
         LIVE_LOGIN_REPORTS.append(report)
         public = application_autofill.public_report(report)
         LOGIN_STATE.append_log("Log into Indeed there, then return here and click Resume Autofill.")
@@ -372,41 +340,22 @@ def timestamp() -> str:
 
 def read_json_file(path: Path, fallback: Any) -> Any:
     """Read JSON from disk, returning fallback for missing or invalid files."""
-    if not path.exists():
-        return fallback
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return fallback
+    return server_profile.read_json_file(path, fallback)
 
 
 def write_json_file(path: Path, payload: Any) -> None:
     """Write a JSON payload, creating parent directories as needed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2)
-        file.write("\n")
+    server_profile.write_json_file(path, payload)
 
 
 def load_applicant_profile() -> dict[str, Any]:
     """Load local applicant profile fields for copy/paste assistance."""
-    profile = read_json_file(PROFILE_FILE, {})
-    return profile if isinstance(profile, dict) else {}
+    return server_profile.load_profile(PROFILE_FILE, read_json_file)
 
 
 def profile_missing_fields(profile: dict[str, Any]) -> list[str]:
     """Return friendly names for required profile fields that are missing."""
-    missing = []
-    first = clean_payload_text(profile.get("first_name"))
-    last = clean_payload_text(profile.get("last_name"))
-    full_name = clean_payload_text(profile.get("name"))
-    if not full_name and not (first and last):
-        missing.append(PROFILE_REQUIRED_LABELS["name"])
-    for key in ("email", "phone", "city", "state", "availability"):
-        if not clean_payload_text(profile.get(key)):
-            missing.append(PROFILE_REQUIRED_LABELS[key])
-    return missing
+    return server_profile.profile_missing_fields(profile, clean_payload_text, PROFILE_REQUIRED_LABELS)
 
 
 def build_setup_status() -> dict[str, Any]:
@@ -468,77 +417,48 @@ def build_setup_status() -> dict[str, Any]:
 
 def save_applicant_profile_updates(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Save friendly profile fields while preserving advanced local data."""
-    profile = load_applicant_profile()
-    for key in PROFILE_EDIT_FIELDS:
-        if key in payload:
-            profile[key] = clean_payload_text(payload.get(key), 5000)
-
-    write_json_file(PROFILE_FILE, profile)
-    warnings = []
-    resume_issue = application_autofill.resume_path_issue(profile)
-    if resume_issue:
-        warnings.append(resume_issue)
-    return profile, warnings
+    return server_profile.save_profile_updates(
+        PROFILE_FILE,
+        payload,
+        PROFILE_EDIT_FIELDS,
+        clean_payload_text,
+        application_autofill.resume_path_issue,
+        load_applicant_profile,
+        write_json_file,
+    )
 
 
 def common_answer_field_map() -> dict[str, dict[str, str]]:
     """Return metadata for editable common answers."""
-    return {
-        key: {"key": key, "label": label, "prompt": prompt}
-        for key, label, prompt in COMMON_ANSWER_FIELDS
-    }
+    return server_profile.common_answer_field_map(COMMON_ANSWER_FIELDS)
 
 
 def common_answers_from_profile(profile: dict[str, Any]) -> dict[str, str]:
     """Return common answers from the profile's advanced custom_answers map."""
-    raw_answers = profile.get("custom_answers", {})
-    answers = raw_answers if isinstance(raw_answers, dict) else {}
-    result: dict[str, str] = {}
-    field_map = common_answer_field_map()
-    for key in field_map:
-        prompts = (field_map[key]["prompt"], *COMMON_ANSWER_ALIASES.get(key, ()))
-        result[key] = ""
-        for prompt in prompts:
-            value = clean_payload_text(answers.get(prompt), 5000)
-            if value:
-                result[key] = value
-                break
-    if not result.get("availability"):
-        result["availability"] = clean_payload_text(profile.get("availability"), 5000)
-    return result
+    return server_profile.common_answers_from_profile(
+        profile,
+        common_answer_field_map(),
+        COMMON_ANSWER_ALIASES,
+        clean_payload_text,
+    )
 
 
 def common_answers_payload(payload: dict[str, Any]) -> tuple[dict[str, str], Optional[str]]:
     """Normalize a common-answer save payload."""
-    raw_answers = payload.get("answers", payload)
-    if not isinstance(raw_answers, dict):
-        return {}, "answers must be a JSON object."
-    allowed = common_answer_field_map()
-    result = {}
-    for key in allowed:
-        if key in raw_answers:
-            result[key] = clean_payload_text(raw_answers.get(key), 5000)
-    return result, None
+    return server_profile.common_answers_payload(payload, common_answer_field_map(), clean_payload_text)
 
 
 def save_common_answers_updates(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], Optional[str]]:
     """Save common answers while preserving other custom answers."""
-    updates, error = common_answers_payload(payload)
-    if error:
-        return {}, {}, error
-    profile = load_applicant_profile()
-    existing = profile.get("custom_answers", {})
-    custom = dict(existing) if isinstance(existing, dict) else {}
-    field_map = common_answer_field_map()
-    for key, value in updates.items():
-        prompt = field_map[key]["prompt"]
-        if value:
-            custom[prompt] = value
-        else:
-            custom.pop(prompt, None)
-    profile["custom_answers"] = custom
-    write_json_file(PROFILE_FILE, profile)
-    return profile, common_answers_from_profile(profile), None
+    return server_profile.save_common_answers_updates(
+        PROFILE_FILE,
+        payload,
+        common_answer_field_map(),
+        COMMON_ANSWER_ALIASES,
+        clean_payload_text,
+        load_applicant_profile,
+        write_json_file,
+    )
 
 
 def common_answers_response() -> dict[str, Any]:
@@ -557,220 +477,93 @@ def common_answers_response() -> dict[str, Any]:
 
 def ollama_base_url() -> str:
     """Return the configured Ollama base URL without a trailing slash."""
-    return os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+    return server_ai.ollama_base_url(DEFAULT_OLLAMA_BASE_URL)
 
 
 def ollama_model() -> str:
     """Return the configured Ollama model name."""
-    return os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    return server_ai.ollama_model(DEFAULT_OLLAMA_MODEL)
 
 
 def ollama_available(timeout: float = 0.7) -> bool:
     """Whether the local Ollama API looks reachable."""
-    try:
-        response = requests.get(f"{ollama_base_url()}/api/tags", timeout=timeout)
-    except requests.RequestException:
-        return False
-    return response.status_code < 400
+    return server_ai.ollama_available(ollama_base_url(), requests, timeout)
 
 
 def ai_provider_status() -> dict[str, Any]:
     """Return the currently available AI polish provider."""
-    if os.getenv("OPENAI_API_KEY"):
-        model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-        return {
-            "enabled": True,
-            "provider": "openai",
-            "model": model,
-            "message": f"AI polish available through OpenAI ({model}).",
-        }
-    model = ollama_model()
-    if ollama_available():
-        return {
-            "enabled": True,
-            "provider": "ollama",
-            "model": model,
-            "message": f"AI polish available locally through Ollama ({model}).",
-        }
-    return {
-        "enabled": False,
-        "provider": "none",
-        "model": model,
-        "message": OLLAMA_SETUP_MESSAGE,
-    }
+    return server_ai.ai_provider_status(
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+        ollama_available(),
+        ollama_model(),
+        OLLAMA_SETUP_MESSAGE,
+    )
 
 
 def build_ai_polish_prompt(payload: dict[str, Any], profile: dict[str, Any]) -> tuple[str, Optional[str]]:
     """Build a safe prompt for review-first answer improvement."""
-    answer_key = clean_payload_text(payload.get("key"), 80)
-    field = common_answer_field_map().get(answer_key)
-    if not field:
-        return "", "Unknown common answer field."
-    draft = clean_payload_text(payload.get("draft"), 3000)
-    if not draft:
-        return "", "Write an answer first, then ask AI to improve it."
-    job = payload.get("job", {})
-    if not isinstance(job, dict):
-        job = {}
-    title = clean_payload_text(job.get("title"), 200) or "Not specified"
-    company = clean_payload_text(job.get("company"), 200) or "Not specified"
-    description = clean_payload_text(job.get("description") or job.get("reason"), 1400) or "Not specified"
-    student_context = clean_payload_text(profile.get("short_intro"), 700) or "High school student seeking entry-level work."
-    prompt = f"""Improve this student job-application answer.
-
-Question type: {field['label']}
-Likely application question: {field['prompt']}
-Current answer: {draft}
-
-Selected job:
-Title: {title}
-Employer: {company}
-Description/context: {description}
-
-Student context: {student_context}
-
-Rules:
-- Return only one improved answer, 1-3 sentences.
-- Keep it honest, natural, specific, and appropriate for a high school student.
-- Do not invent experience, credentials, availability, transportation, legal eligibility, age, or work authorization.
-- Do not answer sensitive/legal/demographic questions.
-- Keep the student's meaning, but make wording clearer and more matched to the job."""
-    return prompt, None
+    return server_ai.build_ai_polish_prompt(
+        payload,
+        profile,
+        common_answer_field_map(),
+        clean_payload_text,
+    )
 
 
 def build_question_suggestion_prompt(payload: dict[str, Any], profile: dict[str, Any]) -> tuple[str, Optional[str]]:
     """Build a safe prompt for a review-field answer suggestion."""
-    question = clean_payload_text(payload.get("question"), 1000)
-    if not question:
-        return "", "Question text is required."
-    if application_autofill.is_sensitive_prompt(question) or application_autofill.is_legal_prompt(question):
-        return "", "This question needs your review and should not be answered by AI."
-    job = payload.get("job", {})
-    if not isinstance(job, dict):
-        job = {}
-    title = clean_payload_text(job.get("title"), 200) or "Not specified"
-    company = clean_payload_text(job.get("company"), 200) or "Not specified"
-    description = clean_payload_text(job.get("description") or job.get("reason"), 1400) or "Not specified"
-    student_context = clean_payload_text(profile.get("short_intro"), 700) or "High school student seeking entry-level work."
-    common = common_answers_from_profile(profile)
-    common_lines = [
-        f"- {meta['label']}: {common.get(key)}"
-        for key, meta in common_answer_field_map().items()
-        if common.get(key)
-    ]
-    common_context = "\n".join(common_lines) or "- No saved common answers."
-    prompt = f"""Draft a review-first answer for a student job application question.
-
-Application question: {question}
-
-Selected job:
-Title: {title}
-Employer: {company}
-Description/context: {description}
-
-Student profile/context: {student_context}
-Saved common answers:
-{common_context}
-
-Rules:
-- Return only one suggested answer, 1-3 sentences.
-- Keep it honest, natural, and appropriate for a high school student.
-- Do not invent work experience, credentials, availability, transportation, legal eligibility, age, or work authorization.
-- If the question asks about service/customer/food/retail experience and the profile does not show formal experience, say that honestly and emphasize reliability, willingness to learn, school/team experience, and customer-friendly skills.
-- Do not answer sensitive/legal/demographic questions.
-- This is a suggestion for user review, not an automatic form submission."""
-    return prompt, None
+    return server_ai.build_question_suggestion_prompt(
+        payload,
+        profile,
+        common_answers_from_profile(profile),
+        common_answer_field_map(),
+        clean_payload_text,
+        application_autofill.is_sensitive_prompt,
+        application_autofill.is_legal_prompt,
+    )
 
 
 def extract_openai_text(payload: dict[str, Any]) -> str:
     """Extract text from a Responses API payload."""
-    direct = payload.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    chunks = []
-    for item in payload.get("output", []):
-        if not isinstance(item, dict):
-            continue
-        for content in item.get("content", []):
-            if isinstance(content, dict) and isinstance(content.get("text"), str):
-                chunks.append(content["text"])
-    return "\n".join(chunks).strip()
+    return server_ai.extract_openai_text(payload)
 
 
 def extract_ollama_text(payload: dict[str, Any]) -> str:
     """Extract text from an Ollama generate response."""
-    text = payload.get("response")
-    return text.strip() if isinstance(text, str) else ""
+    return server_ai.extract_ollama_text(payload)
 
 
 def call_openai_polish(prompt: str) -> tuple[dict[str, str], int]:
     """Call OpenAI for one review-first suggestion."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY is not set."}, 503
-    model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    try:
-        response = requests.post(
-            OPENAI_RESPONSES_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "instructions": "You improve short job application answers for a student. Return only the revised answer.",
-                "input": prompt,
-                "max_output_tokens": 220,
-                "temperature": 0.2,
-            },
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        return {"error": f"Could not reach OpenAI: {exc}"}, 502
-    if response.status_code >= 400:
-        return {"error": f"OpenAI request failed with status {response.status_code}."}, 502
-    try:
-        response_payload = response.json()
-    except ValueError:
-        return {"error": "OpenAI returned a non-JSON response."}, 502
-    suggestion = extract_openai_text(response_payload)
-    if not suggestion:
-        return {"error": "OpenAI did not return a suggestion."}, 502
-    return {"suggestion": suggestion, "model": model, "provider": "openai"}, 200
+    return server_ai.call_openai_polish(
+        prompt,
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+        OPENAI_RESPONSES_URL,
+        requests,
+    )
 
 
 def call_ollama_polish(prompt: str) -> tuple[dict[str, str], int]:
     """Call local Ollama for one review-first suggestion."""
-    model = ollama_model()
-    try:
-        response = requests.post(
-            f"{ollama_base_url()}/api/generate",
-            json={
-                "model": model,
-                "system": "You improve short job application answers for a student. Return only the revised answer.",
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.2},
-            },
-            timeout=45,
-        )
-    except requests.RequestException as exc:
-        return {"error": f"Could not reach Ollama: {exc}. {OLLAMA_SETUP_MESSAGE}"}, 502
-    if response.status_code >= 400:
-        return {
-            "error": (
-                f"Ollama request failed with status {response.status_code}. "
-                f"Make sure `{model}` is installed with `ollama pull {model}`."
-            )
-        }, 502
-    try:
-        response_payload = response.json()
-    except ValueError:
-        return {"error": "Ollama returned a non-JSON response."}, 502
-    suggestion = extract_ollama_text(response_payload)
-    if not suggestion:
-        return {"error": "Ollama did not return a suggestion."}, 502
-    return {"suggestion": suggestion, "model": model, "provider": "ollama"}, 200
+    return server_ai.call_ollama_polish(
+        prompt,
+        ollama_base_url(),
+        ollama_model(),
+        OLLAMA_SETUP_MESSAGE,
+        requests,
+    )
+
+
+def suggest_with_configured_provider(prompt: str) -> tuple[dict[str, str], int]:
+    """Route a prompt through the configured AI provider order."""
+    provider = ai_provider_status()
+    if provider["provider"] == "openai":
+        return call_openai_polish(prompt)
+    if provider["provider"] == "ollama":
+        return call_ollama_polish(prompt)
+    return {"error": provider["message"], "provider": "none"}, 503
 
 
 def improve_common_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
@@ -778,12 +571,7 @@ def improve_common_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]
     prompt, error = build_ai_polish_prompt(payload, load_applicant_profile())
     if error:
         return {"error": error}, 400
-    provider = ai_provider_status()
-    if provider["provider"] == "openai":
-        return call_openai_polish(prompt)
-    if provider["provider"] == "ollama":
-        return call_ollama_polish(prompt)
-    return {"error": provider["message"], "provider": "none"}, 503
+    return suggest_with_configured_provider(prompt)
 
 
 def suggest_application_answer(payload: dict[str, Any]) -> tuple[dict[str, str], int]:
@@ -791,12 +579,7 @@ def suggest_application_answer(payload: dict[str, Any]) -> tuple[dict[str, str],
     prompt, error = build_question_suggestion_prompt(payload, load_applicant_profile())
     if error:
         return {"error": error}, 400
-    provider = ai_provider_status()
-    if provider["provider"] == "openai":
-        return call_openai_polish(prompt)
-    if provider["provider"] == "ollama":
-        return call_ollama_polish(prompt)
-    return {"error": provider["message"], "provider": "none"}, 503
+    return suggest_with_configured_provider(prompt)
 
 
 def load_application_records() -> dict[str, dict[str, Any]]:

@@ -200,45 +200,53 @@ function useSuggestion() {
   showCommonAnswersMessage("Suggestion inserted. Save Common Answers when ready.");
 }
 
-function reviewQuestionText(item) {
-  let text = String(item || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-  // Defense-in-depth: strip any machine ids that slipped through the server.
-  text = text
-    .replace(/\bq_[0-9a-f]{12,}\b/gi, " ")
-    .replace(/:r[0-9a-z]+:/gi, " ")
-    .replace(/\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b/gi, " ")
-    .replace(/^[\s\-–—:]+/, "")
-    .replace(/^(?:-?\d+\s+){1,3}/, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s*\*\s*$/, "")
-    .trim();
-  return text || "Question on the application — review it on the page.";
+function normalizeReviewItem(item) {
+  if (item && typeof item === "object") {
+    const question = String(item.question || item.raw_label || "").trim();
+    const reason = String(item.reason || item.reason_detail || "").trim();
+    return {
+      question: question || "Question on the application — review it on the page.",
+      reason: reason || "Needs review",
+      kind: String(item.kind || "question"),
+      suggestable: Boolean(item.suggestable),
+      rawLabel: String(item.raw_label || ""),
+      options: Array.isArray(item.options) ? item.options : []
+    };
+  }
+  const text = String(item || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return {
+    question: text || "Question on the application — review it on the page.",
+    reason: "Needs review",
+    kind: "question",
+    suggestable: false,
+    rawLabel: String(item || ""),
+    options: []
+  };
 }
 
-function isSuggestableReviewQuestion(item) {
-  const text = String(item || "").toLowerCase();
-  if (!text || text.includes("sensitive") || text.includes("legal") || text.includes("resume")) return false;
-  if (text.includes("captcha") || text.includes("verification") || text.includes("password")) return false;
-  return text.includes("no confident answer") || text.includes("review");
+function reviewOptionsSummary(item) {
+  if (!item.options.length) return "";
+  return item.options.slice(0, 6).join(", ");
 }
 
 function renderReviewQuestions(items) {
   if (!reviewQuestionsEl) return;
-  const rows = (items || []).filter(Boolean);
+  const rows = (items || []).filter(Boolean).map(normalizeReviewItem);
   if (!rows.length) {
     reviewQuestionsEl.classList.add("hidden");
     reviewQuestionsEl.innerHTML = "";
+    reviewQuestionsEl.dataset.questions = "[]";
     return;
   }
   reviewQuestionsEl.classList.remove("hidden");
   reviewQuestionsEl.innerHTML = rows.map((item, index) => {
-    const question = reviewQuestionText(item);
-    const canSuggest = isSuggestableReviewQuestion(item);
+    const options = reviewOptionsSummary(item);
     return `
       <article class="review-question">
-        <strong>Needs review</strong>
-        <span>${escapeText(question || item)}</span>
-        ${canSuggest ? `<button class="secondary-button" type="button" data-question-suggest="${index}">Get AI suggestion</button>` : ""}
+        <strong>${escapeText(item.reason || "Needs review")}</strong>
+        <span>${escapeText(item.question)}</span>
+        ${options ? `<small>Choices: ${escapeText(options)}</small>` : ""}
+        ${item.suggestable ? `<button class="secondary-button" type="button" data-question-suggest="${index}">Get AI suggestion</button>` : ""}
       </article>
     `;
   }).join("");
@@ -248,15 +256,14 @@ function renderReviewQuestions(items) {
 async function suggestReviewAnswer(index) {
   if (!reviewQuestionsEl) return;
   const questions = JSON.parse(reviewQuestionsEl.dataset.questions || "[]");
-  const rawQuestion = questions[Number(index)] || "";
-  const question = reviewQuestionText(rawQuestion);
-  if (!question) return;
+  const item = normalizeReviewItem(questions[Number(index)] || {});
+  if (!item.question || !item.suggestable) return;
   if (reviewQuestionSuggestionText) reviewQuestionSuggestionText.textContent = "Asking AI for a review-first suggestion...";
   if (reviewQuestionSuggestion) reviewQuestionSuggestion.classList.remove("hidden");
   const response = await fetch("/api/application-questions/suggest", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, job: selectedJob || {} })
+    body: JSON.stringify({ question: item.question, review_item: item, job: selectedJob || {} })
   });
   const result = await response.json().catch(() => ({ error: "Could not suggest an answer." }));
   if (!response.ok) {
@@ -416,7 +423,7 @@ async function refreshAutofillStatus() {
     autofillLog.textContent = data.logs || "";
     autofillLog.scrollTop = autofillLog.scrollHeight;
   }
-  renderReviewQuestions(report.current_step_needs_review || []);
+  renderReviewQuestions(report.current_step_review_items || report.current_step_needs_review || []);
   if (autofillButton) autofillButton.disabled = !selectedJob || data.status === "running";
   const canResume = needsLogin || needsVerification || ["needs_review", "resume_needs_review", "no_safe_advance"].includes(stoppedReason);
   if (resumeAutofillButton) resumeAutofillButton.disabled = !selectedJob || data.status === "running" || !canResume;
