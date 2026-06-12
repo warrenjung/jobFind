@@ -1,0 +1,41 @@
+import export_clean_template as ect
+
+
+class TestRenderPage:
+    def test_renders_full_html_document(self):
+        html = ect.render_page(
+            header_title="Job Results",
+            header_summary="3 jobs",
+            cards_html="<article>card</article>",
+            controls_html="<div class='controls'></div>",
+            no_match_html="",
+            script_html="<script>1</script>",
+        )
+        assert html.lstrip().startswith("<!doctype html>")
+        assert "<article>card</article>" in html
+        assert "Job Results" in html
+        assert "3 jobs" in html
+        assert html.rstrip().endswith("</html>")
+
+    def test_escapes_header_title(self):
+        html = ect.render_page(
+            header_title="A & B <x>",
+            header_summary="ok",
+            cards_html="",
+            controls_html="",
+            no_match_html="",
+            script_html="",
+        )
+        assert "A &amp; B &lt;x&gt;" in html
+
+
+class TestBuildControls:
+    def test_includes_source_options(self):
+        controls = ect.build_controls_html("<option>Indeed</option>")
+        assert "<option>Indeed</option>" in controls
+
+
+class TestTimestamp:
+    def test_timestamp_is_nonempty_string(self):
+        assert isinstance(ect.generated_timestamp(), str)
+        assert ect.generated_timestamp()
