@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from utils import atomic_write_text
+
 
 DEFAULT_PROFILE_REQUIRED_LABELS = {
     "name": "name",
@@ -66,11 +68,8 @@ def read_json_file(path: Path, fallback: Any) -> Any:
 
 
 def write_json_file(path: Path, payload: Any) -> None:
-    """Write a JSON payload, creating parent directories as needed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2)
-        file.write("\n")
+    """Write a JSON payload atomically, creating parent directories as needed."""
+    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
 
 
 def load_profile(profile_file: Path, read_json: Callable[[Path, Any], Any] = read_json_file) -> dict[str, Any]:

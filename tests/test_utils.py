@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 import utils
 
 
@@ -36,3 +40,42 @@ class TestSlugifyLocation:
 
     def test_empty_falls_back_to_location(self):
         assert utils.slugify_location("!!!") == "location"
+
+
+class TestAtomicWriteText:
+    def test_writes_content(self, tmp_path):
+        target = tmp_path / "out.txt"
+        utils.atomic_write_text(target, "hello\n")
+        assert target.read_text(encoding="utf-8") == "hello\n"
+
+    def test_creates_parent_dirs(self, tmp_path):
+        target = tmp_path / "nested" / "deep" / "out.txt"
+        utils.atomic_write_text(target, "data")
+        assert target.read_text(encoding="utf-8") == "data"
+
+    def test_overwrites_existing(self, tmp_path):
+        target = tmp_path / "out.txt"
+        target.write_text("old", encoding="utf-8")
+        utils.atomic_write_text(target, "new")
+        assert target.read_text(encoding="utf-8") == "new"
+
+    def test_leaves_no_temp_files_on_success(self, tmp_path):
+        utils.atomic_write_text(tmp_path / "out.txt", "ok")
+        leftovers = [p.name for p in tmp_path.iterdir() if p.name != "out.txt"]
+        assert leftovers == []
+
+    def test_failure_preserves_original_and_cleans_temp(self, tmp_path, monkeypatch):
+        target = tmp_path / "out.txt"
+        target.write_text("original", encoding="utf-8")
+
+        def boom(*_args, **_kwargs):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(utils.os, "replace", boom)
+        with pytest.raises(OSError):
+            utils.atomic_write_text(target, "should not land")
+
+        # Original file is untouched and no temp file was left behind.
+        assert target.read_text(encoding="utf-8") == "original"
+        leftovers = [p.name for p in tmp_path.iterdir() if p.name != "out.txt"]
+        assert leftovers == []

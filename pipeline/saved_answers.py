@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from autofill_review import is_safe_saved_answer_prompt
+from utils import atomic_write_text
 
 
 def clean_text(value: Any, max_length: int = 5000) -> str:
@@ -67,11 +68,8 @@ def saved_answer_map(payload: dict[str, Any]) -> dict[str, str]:
 
 
 def write_saved_answers(path: Path, payload: dict[str, Any]) -> None:
-    """Write saved answers as stable JSON."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2)
-        file.write("\n")
+    """Write saved answers as stable JSON, atomically."""
+    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
 
 
 def markdown_escape(value: Any) -> str:
@@ -115,9 +113,7 @@ def write_saved_answers_markdown(path: Path, payload: dict[str, Any]) -> None:
             )
             + " |"
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        file.write("\n".join(lines).rstrip() + "\n")
+    atomic_write_text(path, "\n".join(lines).rstrip() + "\n")
 
 
 def normalize_save_payload(payload: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
