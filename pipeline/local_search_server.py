@@ -68,6 +68,17 @@ APPLICATION_STATUSES = {
     "Skipped",
     "Needs follow-up",
 }
+OVERLAY_MUTATION_ROUTES = {
+    "/api/applications/autofill/overlay-resume",
+    "/api/saved-answers",
+}
+OVERLAY_ALLOWED_ORIGIN_PREFIXES = (
+    "https://www.indeed.com",
+    "https://smartapply.indeed.com",
+    "https://apply.indeed.com",
+    "http://127.0.0.1",
+    "http://localhost",
+)
 
 LIVE_AUTOFILL_REPORTS: list[dict[str, Any]] = []
 LIVE_LOGIN_REPORTS: list[dict[str, Any]] = []
@@ -442,6 +453,24 @@ def save_overlay_answer(payload: dict[str, Any]) -> tuple[Optional[dict[str, Any
     )
 
 
+def update_saved_answer(payload: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Update a saved answer from the local manager UI."""
+    return saved_answers.update_saved_answer(
+        SAVED_ANSWERS_FILE,
+        SAVED_ANSWERS_MD_FILE,
+        payload,
+    )
+
+
+def delete_saved_answer(payload: dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """Delete a saved answer from the local manager UI."""
+    return saved_answers.delete_saved_answer(
+        SAVED_ANSWERS_FILE,
+        SAVED_ANSWERS_MD_FILE,
+        payload,
+    )
+
+
 def profile_missing_fields(profile: dict[str, Any]) -> list[str]:
     """Return friendly names for required profile fields that are missing."""
     return server_profile.profile_missing_fields(profile, clean_payload_text, PROFILE_REQUIRED_LABELS)
@@ -673,13 +702,10 @@ def suggest_application_answer(payload: dict[str, Any], ollama_timeout: float = 
 
 
 def common_answer_suggestion_for_item(item: dict[str, Any], profile: dict[str, Any]) -> tuple[str, str]:
-    """Return a saved Common Answer suggestion for a review item, if one matches."""
+    """Return a saved exact answer or Common Answer suggestion for a review item."""
     question = clean_payload_text(item.get("question"), 1000)
     if not question:
         return "", ""
-    remembered = saved_answers.saved_answer_map(load_saved_answers()).get(saved_answers.normalize_question(question))
-    if remembered:
-        return remembered, "saved answer"
     answer, reason = application_autofill.answer_for_prompt(question, profile)
     if answer and (reason == "saved answer" or reason == "custom answer" or reason.startswith("common answer")):
         return answer, reason
@@ -924,7 +950,7 @@ class SearchHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         path = urlparse(self.path).path
-        if path in {"/api/applications/autofill/overlay-resume", "/api/saved-answers"}:
+        if path in OVERLAY_MUTATION_ROUTES:
             self.send_response(204)
             self.add_overlay_cors_headers()
             self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -1028,6 +1054,28 @@ class SearchHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": save_error}, status=400)
                 return
             self.send_json({"saved_answer": saved})
+            return
+        if path == "/api/saved-answers/update":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            saved, update_error = update_saved_answer(payload)
+            if update_error:
+                self.send_json({"error": update_error}, status=400)
+                return
+            self.send_json({"saved_answer": saved})
+            return
+        if path == "/api/saved-answers/delete":
+            payload, error = self.read_json_body()
+            if error:
+                self.send_json({"error": error}, status=400)
+                return
+            deleted, delete_error = delete_saved_answer(payload)
+            if delete_error:
+                self.send_json({"error": delete_error}, status=400)
+                return
+            self.send_json({"deleted": deleted})
             return
         if path == "/api/applications/open":
             payload, error = self.read_json_body()
@@ -1194,16 +1242,10 @@ class SearchHandler(BaseHTTPRequestHandler):
     def add_overlay_cors_headers(self) -> None:
         """Allow only the injected Indeed overlay to call narrow helper endpoints."""
         path = urlparse(self.path).path
-        if path not in {"/api/applications/autofill/overlay-resume", "/api/saved-answers"}:
+        if path not in OVERLAY_MUTATION_ROUTES:
             return
         origin = self.headers.get("Origin", "")
-        allowed = (
-            origin.startswith("https://www.indeed.com")
-            or origin.startswith("https://smartapply.indeed.com")
-            or origin.startswith("https://apply.indeed.com")
-            or origin.startswith("file://")
-        )
-        if allowed:
+        if any(origin.startswith(prefix) for prefix in OVERLAY_ALLOWED_ORIGIN_PREFIXES):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 

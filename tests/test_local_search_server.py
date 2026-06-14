@@ -175,35 +175,127 @@ class TestSavedAnswers:
         assert profile["_saved_answers"] == {"why do you want this job": "Saved answer"}
 
     def test_overlay_enrichment_prefers_saved_answer_before_ai(self, tmp_path, monkeypatch):
-        json_file = tmp_path / "saved_answers.json"
-        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
-        lss.write_json_file(
-            json_file,
-            {
-                "answers": [
-                    {
-                        "key": "why do you want this job",
-                        "question": "Why do you want this job?",
-                        "answer": "Saved exact answer",
-                    }
-                ]
-            },
-        )
-
         def fail_ai(payload, **kwargs):
             raise AssertionError("AI should not be called when a saved answer matches")
 
+        def fail_load():
+            raise AssertionError("saved answers should already be hydrated into the profile")
+
         monkeypatch.setattr(lss, "suggest_application_answer", fail_ai)
+        monkeypatch.setattr(lss, "load_saved_answers", fail_load)
         report = {
             "current_step_review_items": [
                 {"question": "Why do you want this job?", "kind": "text", "suggestable": True}
             ]
         }
 
-        enriched = lss.enrich_review_items_for_overlay(report, {"title": "Cashier"}, {})
+        enriched = lss.enrich_review_items_for_overlay(
+            report,
+            {"title": "Cashier"},
+            {"_saved_answers": {"why do you want this job": "Saved exact answer"}},
+        )
 
         assert enriched[0]["suggestion"] == "Saved exact answer"
         assert enriched[0]["suggestion_source"] == "saved answer"
+
+    def test_update_saved_answer_route_updates_existing_answer(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        md_file = tmp_path / "saved_answers.md"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_MD_FILE", md_file)
+        lss.save_overlay_answer({"question": "Why this job?", "answer": "Old answer", "kind": "text"})
+
+        class DummyHandler:
+            path = "/api/saved-answers/update"
+
+            def __init__(self):
+                self.sent = None
+
+            def read_json_body(self):
+                return {"key": "why this job", "answer": "New answer", "autofill_enabled": False}, None
+
+            def send_json(self, payload, status=200):
+                self.sent = (payload, status)
+
+            def send_error(self, *args):
+                raise AssertionError(args)
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.do_POST(handler)
+
+        assert handler.sent[1] == 200
+        assert handler.sent[0]["saved_answer"]["answer"] == "New answer"
+        assert handler.sent[0]["saved_answer"]["autofill_enabled"] is False
+
+    def test_delete_saved_answer_route_deletes_existing_answer(self, tmp_path, monkeypatch):
+        json_file = tmp_path / "saved_answers.json"
+        md_file = tmp_path / "saved_answers.md"
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_FILE", json_file)
+        monkeypatch.setattr(lss, "SAVED_ANSWERS_MD_FILE", md_file)
+        lss.save_overlay_answer({"question": "Why this job?", "answer": "Old answer", "kind": "text"})
+
+        class DummyHandler:
+            path = "/api/saved-answers/delete"
+
+            def __init__(self):
+                self.sent = None
+
+            def read_json_body(self):
+                return {"key": "why this job"}, None
+
+            def send_json(self, payload, status=200):
+                self.sent = (payload, status)
+
+            def send_error(self, *args):
+                raise AssertionError(args)
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.do_POST(handler)
+
+        assert handler.sent == ({"deleted": True}, 200)
+        assert lss.load_saved_answers() == {"answers": []}
+
+    def test_update_saved_answer_route_rejects_missing_key(self):
+        class DummyHandler:
+            path = "/api/saved-answers/update"
+
+            def __init__(self):
+                self.sent = None
+
+            def read_json_body(self):
+                return {"answer": "No key"}, None
+
+            def send_json(self, payload, status=200):
+                self.sent = (payload, status)
+
+            def send_error(self, *args):
+                raise AssertionError(args)
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.do_POST(handler)
+
+        assert handler.sent[1] == 400
+        assert "key is required" in handler.sent[0]["error"]
+
+    def test_manager_routes_do_not_get_overlay_cors(self):
+        class DummyHandler:
+            path = "/api/saved-answers/update"
+            headers = {"Origin": "https://smartapply.indeed.com"}
+
+            def __init__(self):
+                self.headers_sent = []
+
+            def send_header(self, name, value):
+                self.headers_sent.append((name, value))
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.add_overlay_cors_headers(handler)
+
+        assert not any(name == "Access-Control-Allow-Origin" for name, _ in handler.headers_sent)
 
 
 class TestApplicantProfile:
@@ -787,6 +879,40 @@ class TestAutofillLoginFlow:
         lss.SearchHandler.add_overlay_cors_headers(handler)
 
         assert ("Access-Control-Allow-Origin", "https://smartapply.indeed.com") in handler.headers_sent
+
+    def test_overlay_cors_allows_localhost_dev_origin(self):
+        class DummyHandler:
+            path = "/api/saved-answers"
+            headers = {"Origin": "http://localhost:8000"}
+
+            def __init__(self):
+                self.headers_sent = []
+
+            def send_header(self, name, value):
+                self.headers_sent.append((name, value))
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.add_overlay_cors_headers(handler)
+
+        assert ("Access-Control-Allow-Origin", "http://localhost:8000") in handler.headers_sent
+
+    def test_overlay_cors_rejects_file_origin(self):
+        class DummyHandler:
+            path = "/api/saved-answers"
+            headers = {"Origin": "file://"}
+
+            def __init__(self):
+                self.headers_sent = []
+
+            def send_header(self, name, value):
+                self.headers_sent.append((name, value))
+
+        handler = DummyHandler()
+
+        lss.SearchHandler.add_overlay_cors_headers(handler)
+
+        assert not any(name == "Access-Control-Allow-Origin" for name, _ in handler.headers_sent)
 
     def test_latest_login_port_returns_running_chrome(self, monkeypatch):
         class ExitedProc:

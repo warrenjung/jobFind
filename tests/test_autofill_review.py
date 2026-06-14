@@ -55,6 +55,12 @@ class TestSuggestable:
         item = {"kind": "text", "question": "What is your social security number?", "reason": "x"}
         assert ar.is_suggestable_review_item(item) is False
 
+    def test_saved_answer_safety_uses_sensitive_and_legal_rules(self):
+        assert ar.is_safe_saved_answer_prompt("What is your social security number?") is False
+        assert ar.is_safe_saved_answer_prompt("Are you legally authorized to work?") is False
+        assert ar.is_safe_saved_answer_prompt("Yes/No question on this step") is False
+        assert ar.is_safe_saved_answer_prompt("Why do you want this role?") is True
+
     def test_plain_question_is_suggestable(self):
         item = {"kind": "text", "question": "Why do you want this role?", "reason": "no confident answer"}
         assert ar.is_suggestable_review_item(item) is True

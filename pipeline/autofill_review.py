@@ -21,6 +21,13 @@ LEGAL_PATTERNS = (
     "work permit",
 )
 
+GENERIC_REVIEW_QUESTIONS = {
+    "yes no question on this step",
+    "question on this step",
+    "review this field on the page",
+    "unlabeled text field",
+}
+
 TEXT_FIELD_PATTERNS = (
     ("first_name", ("first name", "given name")),
     ("last_name", ("last name", "surname", "family name")),
@@ -165,13 +172,6 @@ _FRAMEWORK_TOKEN_RE = re.compile(
     r"\b[a-z]+(?:-[a-z]+)*-(?:question|select|input|textarea)(?:-input)?(?:-\d+)?\b",
     re.IGNORECASE,
 )
-_GENERIC_REVIEW_QUESTIONS = {
-    "yes no question on this step",
-    "question on this step",
-    "review this field on the page",
-}
-
-
 def clean_text(value: Any) -> str:
     """Normalize browser/profile text for matching."""
     text = "" if value is None else str(value)
@@ -270,6 +270,17 @@ def is_legal_prompt(prompt: str) -> bool:
     """Whether a prompt is about work authorization / age / permits."""
     text = normalize(prompt)
     return any(pattern in text for pattern in LEGAL_PATTERNS)
+
+
+def is_generic_review_prompt(prompt: str) -> bool:
+    """Whether a prompt is a fallback label, not a real question."""
+    return normalize(prompt) in GENERIC_REVIEW_QUESTIONS
+
+
+def is_safe_saved_answer_prompt(prompt: str) -> bool:
+    """Whether a prompt can be safely remembered for exact-match reuse."""
+    text = normalize(prompt)
+    return bool(text) and not is_generic_review_prompt(text) and not is_sensitive_prompt(text) and not is_legal_prompt(text)
 
 
 def is_search_prompt(prompt: str) -> bool:
@@ -473,7 +484,7 @@ def is_suggestable_review_item(item: dict[str, Any]) -> bool:
     reason = normalize(item.get("reason_detail") or item.get("reason"))
     if kind in {"resume", "verification", "login", "submit", "blocked"}:
         return False
-    if question in _GENERIC_REVIEW_QUESTIONS:
+    if is_generic_review_prompt(question):
         return False
     if is_sensitive_prompt(question) or is_legal_prompt(question):
         return False

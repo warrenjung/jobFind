@@ -24,6 +24,9 @@ const commonAnswerSuggestion = document.querySelector("#common-answer-suggestion
 const commonAnswerSuggestionText = document.querySelector("#common-answer-suggestion-text");
 const useSuggestionButton = document.querySelector("#use-suggestion-button");
 const dismissSuggestionButton = document.querySelector("#dismiss-suggestion-button");
+const savedAnswersList = document.querySelector("#saved-answers-list");
+const savedAnswersMessage = document.querySelector("#saved-answers-message");
+const refreshSavedAnswersButton = document.querySelector("#refresh-saved-answers-button");
 const applicationList = document.querySelector("#application-list");
 const applicationButtons = Array.from(document.querySelectorAll("[data-application-status]"));
 const indeedLoginButton = document.querySelector("#indeed-login-button");
@@ -42,6 +45,8 @@ let selectedJob = null;
 let currentProfile = {};
 let commonAnswerFields = [];
 let commonAnswers = {};
+let savedAnswers = [];
+let editingSavedAnswerKey = "";
 let suggestionTargetKey = "";
 let setupStatus = null;
 const setupPreferenceKey = "jobfind.setup.open";
@@ -102,6 +107,11 @@ function escapeText(value) {
   }[char]));
 }
 
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) return CSS.escape(String(value || ""));
+  return String(value || "").replace(/["\\]/g, "\\$&");
+}
+
 function profileValueText(value) {
   if (value && typeof value === "object") return JSON.stringify(value);
   return String(value || "");
@@ -122,6 +132,119 @@ function showCommonAnswersMessage(message, isError = false) {
   if (!commonAnswersMessage) return;
   commonAnswersMessage.textContent = message || "";
   commonAnswersMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
+}
+
+function showSavedAnswersMessage(message, isError = false) {
+  if (!savedAnswersMessage) return;
+  savedAnswersMessage.textContent = message || "";
+  savedAnswersMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
+}
+
+function savedAnswerEnabled(row) {
+  return row.autofill_enabled !== false;
+}
+
+function savedAnswerMeta(row) {
+  const parts = [
+    row.source ? `Source: ${row.source}` : "",
+    row.kind ? `Type: ${row.kind}` : "",
+    row.employer || row.job_title ? [row.job_title, row.employer].filter(Boolean).join(" · ") : "",
+    row.updated_at ? `Updated: ${row.updated_at}` : ""
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function renderSavedAnswers(payload) {
+  if (!savedAnswersList) return;
+  savedAnswers = Array.isArray(payload.answers) ? payload.answers : [];
+  if (!savedAnswers.length) {
+    savedAnswersList.innerHTML = '<article class="saved-answer-card empty">No saved answers yet. Use Accept or Accept edit in the Indeed helper to create one.</article>';
+    showSavedAnswersMessage("Saved answers will appear here after you accept answers in the Indeed helper.");
+    return;
+  }
+  savedAnswersList.innerHTML = savedAnswers.map(row => {
+    const key = escapeText(row.key || "");
+    const enabled = savedAnswerEnabled(row);
+    const isEditing = row.key && row.key === editingSavedAnswerKey;
+    if (isEditing) {
+      return `
+        <article class="saved-answer-card editing" data-saved-key="${key}">
+          <strong>${escapeText(row.question || "Saved question")}</strong>
+          <textarea data-saved-answer-edit="${key}">${escapeText(row.answer || "")}</textarea>
+          <label class="saved-answer-toggle">
+            <input type="checkbox" data-saved-enabled-edit="${key}" ${enabled ? "checked" : ""}>
+            Use for autofill
+          </label>
+          <div class="saved-answer-actions">
+            <button type="button" data-saved-save="${key}">Save</button>
+            <button class="secondary-button" type="button" data-saved-cancel="${key}">Cancel</button>
+          </div>
+        </article>
+      `;
+    }
+    return `
+      <article class="saved-answer-card ${enabled ? "" : "disabled"}" data-saved-key="${key}">
+        <div class="saved-answer-topline">
+          <strong>${escapeText(row.question || "Saved question")}</strong>
+          <span>${enabled ? "Autofill on" : "Autofill off"}</span>
+        </div>
+        <p>${escapeText(row.answer || "")}</p>
+        <small>${escapeText(savedAnswerMeta(row) || "No metadata")}</small>
+        <label class="saved-answer-toggle">
+          <input type="checkbox" data-saved-toggle="${key}" ${enabled ? "checked" : ""}>
+          Use for autofill
+        </label>
+        <div class="saved-answer-actions">
+          <button class="secondary-button" type="button" data-saved-edit="${key}">Edit</button>
+          <button class="secondary-button danger-button" type="button" data-saved-delete="${key}">Delete</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  showSavedAnswersMessage(`${savedAnswers.length} saved answer${savedAnswers.length === 1 ? "" : "s"} available.`);
+}
+
+async function loadSavedAnswers() {
+  if (!savedAnswersList) return;
+  try {
+    renderSavedAnswers(await fetchJson("/api/saved-answers"));
+  } catch (error) {
+    showSavedAnswersMessage("Could not load saved answers.", true);
+  }
+}
+
+async function updateSavedAnswer(key, updates) {
+  const response = await fetch("/api/saved-answers/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, ...updates })
+  });
+  const result = await response.json().catch(() => ({ error: "Could not update saved answer." }));
+  if (!response.ok) {
+    showSavedAnswersMessage(result.error || "Could not update saved answer.", true);
+    return false;
+  }
+  editingSavedAnswerKey = "";
+  await loadSavedAnswers();
+  showSavedAnswersMessage("Saved answer updated.");
+  return true;
+}
+
+async function deleteSavedAnswer(key) {
+  if (!window.confirm("Delete this saved answer?")) return;
+  const response = await fetch("/api/saved-answers/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key })
+  });
+  const result = await response.json().catch(() => ({ error: "Could not delete saved answer." }));
+  if (!response.ok) {
+    showSavedAnswersMessage(result.error || "Could not delete saved answer.", true);
+    return;
+  }
+  if (editingSavedAnswerKey === key) editingSavedAnswerKey = "";
+  await loadSavedAnswers();
+  showSavedAnswersMessage("Saved answer deleted.");
 }
 
 function renderCommonAnswers(payload) {
@@ -441,6 +564,7 @@ async function refreshAutofillStatus() {
     clearInterval(autofillPollTimer);
     autofillPollTimer = null;
     await loadApplications();
+    await loadSavedAnswers();
   }
 }
 
@@ -570,7 +694,40 @@ document.addEventListener("click", async (event) => {
       if (questionSuggestButton) {
         await suggestReviewAnswer(questionSuggestButton.dataset.questionSuggest);
       }
+      const savedEdit = event.target.closest("[data-saved-edit]");
+      if (savedEdit) {
+        editingSavedAnswerKey = savedEdit.dataset.savedEdit;
+        renderSavedAnswers({ answers: savedAnswers });
+      }
+      const savedCancel = event.target.closest("[data-saved-cancel]");
+      if (savedCancel) {
+        editingSavedAnswerKey = "";
+        renderSavedAnswers({ answers: savedAnswers });
+      }
+      const savedSave = event.target.closest("[data-saved-save]");
+      if (savedSave) {
+        const key = savedSave.dataset.savedSave;
+        const answerField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-answer-edit="${cssEscape(key)}"]`) : null;
+        const enabledField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-enabled-edit="${cssEscape(key)}"]`) : null;
+        await updateSavedAnswer(key, {
+          answer: answerField ? answerField.value : "",
+          autofill_enabled: enabledField ? enabledField.checked : true
+        });
+      }
+      const savedDelete = event.target.closest("[data-saved-delete]");
+      if (savedDelete) {
+        await deleteSavedAnswer(savedDelete.dataset.savedDelete);
+      }
     });
+
+if (savedAnswersList) {
+  savedAnswersList.addEventListener("change", async (event) => {
+    const toggle = event.target.closest("[data-saved-toggle]");
+    if (!toggle) return;
+    await updateSavedAnswer(toggle.dataset.savedToggle, { autofill_enabled: toggle.checked });
+  });
+}
+if (refreshSavedAnswersButton) refreshSavedAnswersButton.addEventListener("click", loadSavedAnswers);
 
 if (editProfileButton) {
   editProfileButton.addEventListener("click", () => {
@@ -640,6 +797,7 @@ refreshAutofillStatus();
 loadSetupStatus();
 loadProfile();
 loadCommonAnswers();
+loadSavedAnswers();
 loadApplications();
 
 async function loadConfig() {

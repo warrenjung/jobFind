@@ -11,6 +11,7 @@ class TestSafety:
 
     def test_rejects_generic_placeholder_questions(self):
         assert sa.question_is_safe_to_save("Yes/No question on this step") is False
+        assert sa.question_is_safe_to_save("Yes/No question on this step", "radio") is False
         assert sa.question_is_safe_to_save("Review this field on the page") is False
 
     def test_accepts_ordinary_questions(self):
@@ -37,6 +38,15 @@ class TestReadWrite:
     def test_saved_answer_map_keys_on_normalized_question(self):
         payload = {"answers": [{"key": "why do you want this job", "answer": "Great team"}]}
         assert sa.saved_answer_map(payload) == {"why do you want this job": "Great team"}
+
+    def test_saved_answer_map_skips_disabled_answers(self):
+        payload = {
+            "answers": [
+                {"key": "why do you want this job", "answer": "Great team", "autofill_enabled": False},
+                {"key": "ideal job", "answer": "A friendly team"},
+            ]
+        }
+        assert sa.saved_answer_map(payload) == {"ideal job": "A friendly team"}
 
 
 class TestUpsert:
@@ -69,6 +79,21 @@ class TestUpsert:
         assert saved["times_saved"] == 2
         assert len(sa.read_saved_answers(json_path)["answers"]) == 1
 
+    def test_upsert_preserves_disabled_autofill_setting(self, tmp_path):
+        json_path = tmp_path / "saved.json"
+        md_path = tmp_path / "saved.md"
+        sa.upsert_saved_answer(json_path, md_path, self._payload("first"))
+        sa.update_saved_answer(
+            json_path,
+            md_path,
+            {"key": "why do you want this job", "autofill_enabled": False},
+        )
+        saved, error = sa.upsert_saved_answer(json_path, md_path, self._payload("second"))
+
+        assert error is None
+        assert saved["answer"] == "second"
+        assert saved["autofill_enabled"] is False
+
     def test_rejects_sensitive_on_save(self, tmp_path):
         payload = {"question": "What is your SSN?", "answer": "123-45-6789"}
         saved, error = sa.upsert_saved_answer(tmp_path / "s.json", tmp_path / "s.md", payload)
@@ -81,3 +106,50 @@ class TestUpsert:
             tmp_path / "s.json", tmp_path / "s.md", self._payload(), now=lambda: fixed
         )
         assert saved["updated_at"] == fixed.isoformat()
+
+    def test_update_answer_text_and_markdown(self, tmp_path):
+        json_path = tmp_path / "saved.json"
+        md_path = tmp_path / "saved.md"
+        sa.upsert_saved_answer(json_path, md_path, self._payload("first"))
+
+        saved, error = sa.update_saved_answer(
+            json_path,
+            md_path,
+            {
+                "key": "why do you want this job",
+                "answer": "Updated answer",
+                "autofill_enabled": False,
+            },
+        )
+
+        assert error is None
+        assert saved["answer"] == "Updated answer"
+        assert saved["autofill_enabled"] is False
+        markdown = md_path.read_text(encoding="utf-8")
+        assert "Updated answer" in markdown
+        assert "| No |" in markdown
+        assert sa.saved_answer_map(sa.read_saved_answers(json_path)) == {}
+
+    def test_update_rejects_missing_key(self, tmp_path):
+        saved, error = sa.update_saved_answer(tmp_path / "s.json", tmp_path / "s.md", {})
+
+        assert saved is None
+        assert "key is required" in error
+
+    def test_delete_answer_removes_json_and_markdown(self, tmp_path):
+        json_path = tmp_path / "saved.json"
+        md_path = tmp_path / "saved.md"
+        sa.upsert_saved_answer(json_path, md_path, self._payload())
+
+        deleted, error = sa.delete_saved_answer(json_path, md_path, {"key": "why do you want this job"})
+
+        assert error is None
+        assert deleted is True
+        assert sa.read_saved_answers(json_path) == {"answers": []}
+        assert "Why do you want this job" not in md_path.read_text(encoding="utf-8")
+
+    def test_delete_rejects_missing_key(self, tmp_path):
+        deleted, error = sa.delete_saved_answer(tmp_path / "s.json", tmp_path / "s.md", {})
+
+        assert deleted is False
+        assert "key is required" in error

@@ -8,38 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-
-SENSITIVE_SAVE_PATTERNS = (
-    "social security",
-    "ssn",
-    "password",
-    "passcode",
-    "captcha",
-    "verification code",
-    "one-time code",
-    "otp",
-    "criminal",
-    "felony",
-    "background check",
-    "disability",
-    "veteran",
-    "race",
-    "ethnicity",
-    "gender",
-    "hispanic",
-    "date of birth",
-    "birth date",
-    "birthdate",
-    "authorized to work",
-    "legally authorized",
-    "work authorization",
-    "eligible to work",
-    "require sponsorship",
-    "visa sponsorship",
-    "at least 16",
-    "at least 18",
-    "work permit",
-)
+from autofill_review import is_safe_saved_answer_prompt
 
 
 def clean_text(value: Any, max_length: int = 5000) -> str:
@@ -56,18 +25,7 @@ def normalize_question(value: Any) -> str:
 
 def question_is_safe_to_save(question: Any, kind: Any = "") -> bool:
     """Whether a question is safe to remember and reuse."""
-    text = normalize_question(f"{question} {kind}")
-    if not text:
-        return False
-    generic = {
-        "yes no question on this step",
-        "question on this step",
-        "review this field on the page",
-        "unlabeled text field",
-    }
-    if text in generic:
-        return False
-    return not any(pattern in text for pattern in SENSITIVE_SAVE_PATTERNS)
+    return is_safe_saved_answer_prompt(clean_text(question, 1000))
 
 
 def read_saved_answers(path: Path) -> dict[str, Any]:
@@ -87,12 +45,19 @@ def read_saved_answers(path: Path) -> dict[str, Any]:
     return {"answers": [row for row in rows if isinstance(row, dict)]}
 
 
+def answer_autofill_enabled(row: dict[str, Any]) -> bool:
+    """Whether a saved answer should be reused by autofill."""
+    return row.get("autofill_enabled", True) is not False
+
+
 def saved_answer_map(payload: dict[str, Any]) -> dict[str, str]:
     """Return normalized question key -> answer for autofill."""
     rows = payload.get("answers", []) if isinstance(payload, dict) else []
     result: dict[str, str] = {}
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
+            continue
+        if not answer_autofill_enabled(row):
             continue
         key = clean_text(row.get("key"), 500) or normalize_question(row.get("question"))
         answer = clean_text(row.get("answer"))
@@ -122,8 +87,8 @@ def write_saved_answers_markdown(path: Path, payload: dict[str, Any]) -> None:
         "",
         "These answers are stored locally and reused for exact non-sensitive application questions.",
         "",
-        "| Question | Answer | Kind | Last job | Updated |",
-        "|---|---|---|---|---|",
+        "| Question | Answer | Autofill | Kind | Last job | Updated |",
+        "|---|---|---|---|---|---|",
     ]
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
@@ -142,6 +107,7 @@ def write_saved_answers_markdown(path: Path, payload: dict[str, Any]) -> None:
                 [
                     markdown_escape(row.get("question")),
                     markdown_escape(row.get("answer")),
+                    "Yes" if answer_autofill_enabled(row) else "No",
                     markdown_escape(row.get("kind")),
                     markdown_escape(job or "Not specified"),
                     markdown_escape(row.get("updated_at")),
@@ -203,11 +169,14 @@ def upsert_saved_answer(
     timestamp = (now or (lambda: datetime.now(timezone.utc)))().isoformat()
     existing = next((item for item in rows if item.get("key") == row["key"]), None)
     if existing:
+        autofill_enabled = answer_autofill_enabled(existing)
         existing.update(row)
+        existing["autofill_enabled"] = autofill_enabled
         existing["updated_at"] = timestamp
         existing["times_saved"] = int(existing.get("times_saved") or 1) + 1
         saved = existing
     else:
+        row["autofill_enabled"] = True
         row["first_saved_at"] = timestamp
         row["updated_at"] = timestamp
         row["times_saved"] = 1
@@ -217,3 +186,55 @@ def upsert_saved_answer(
     write_saved_answers(json_path, {"answers": rows})
     write_saved_answers_markdown(markdown_path, {"answers": rows})
     return saved, None
+
+
+def update_saved_answer(
+    json_path: Path,
+    markdown_path: Path,
+    payload: dict[str, Any],
+    now: Optional[Callable[[], datetime]] = None,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Update editable saved-answer fields and refresh Markdown."""
+    if not isinstance(payload, dict):
+        return None, "saved answer update must be a JSON object."
+    key = clean_text(payload.get("key"), 500)
+    if not key:
+        return None, "saved answer key is required."
+    current = read_saved_answers(json_path)
+    rows = current["answers"]
+    existing = next((item for item in rows if clean_text(item.get("key"), 500) == key), None)
+    if existing is None:
+        return None, "saved answer not found."
+    if "answer" in payload:
+        answer = clean_text(payload.get("answer"), 5000)
+        if not answer:
+            return None, "answer is required."
+        existing["answer"] = answer
+    if "autofill_enabled" in payload:
+        existing["autofill_enabled"] = bool(payload.get("autofill_enabled"))
+    existing["updated_at"] = (now or (lambda: datetime.now(timezone.utc)))().isoformat()
+    rows.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    write_saved_answers(json_path, {"answers": rows})
+    write_saved_answers_markdown(markdown_path, {"answers": rows})
+    return existing, None
+
+
+def delete_saved_answer(
+    json_path: Path,
+    markdown_path: Path,
+    payload: dict[str, Any],
+) -> tuple[bool, Optional[str]]:
+    """Delete one saved answer by key and refresh Markdown."""
+    if not isinstance(payload, dict):
+        return False, "saved answer delete must be a JSON object."
+    key = clean_text(payload.get("key"), 500)
+    if not key:
+        return False, "saved answer key is required."
+    current = read_saved_answers(json_path)
+    rows = current["answers"]
+    kept = [row for row in rows if clean_text(row.get("key"), 500) != key]
+    if len(kept) == len(rows):
+        return False, "saved answer not found."
+    write_saved_answers(json_path, {"answers": kept})
+    write_saved_answers_markdown(markdown_path, {"answers": kept})
+    return True, None
