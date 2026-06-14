@@ -15,8 +15,8 @@ from typing import Any, Optional
 NOT_SPECIFIED = "Not specified"
 
 
-def atomic_write_text(path: Path, text: str) -> None:
-    """Write text to ``path`` atomically.
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write bytes to ``path`` atomically.
 
     Writes to a temporary file in the same directory and then ``os.replace``s
     it into place, so an interrupted write (crash, Ctrl-C, power loss) can never
@@ -27,8 +27,8 @@ def atomic_write_text(path: Path, text: str) -> None:
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            file.write(text)
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
         os.replace(tmp_name, path)
     except BaseException:
         try:
@@ -36,6 +36,30 @@ def atomic_write_text(path: Path, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write text to ``path`` atomically (see ``atomic_write_bytes``)."""
+    atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def safe_resume_filename(name: Any, allowed_exts: Any) -> Optional[str]:
+    """Return a sanitized, allowlist-checked resume filename, or None.
+
+    Strips any directory components (path traversal) and null bytes, keeps only
+    safe characters in the stem, and requires the lowercased extension to be in
+    ``allowed_exts``.
+    """
+    raw = os.path.basename(str(name or "")).replace("\x00", "").strip()
+    if not raw:
+        return None
+    stem, ext = os.path.splitext(raw)
+    ext = ext.lower()
+    if ext not in allowed_exts:
+        return None
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    stem = re.sub(r"_{2,}", "_", stem) or "resume"
+    return f"{stem}{ext}"
 
 
 def clean_text(value: Any) -> str:

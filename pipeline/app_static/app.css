@@ -325,6 +325,34 @@ textarea { min-height: 74px; resize: vertical; }
   justify-content: space-between;
   gap: 10px;
 }
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.apply-panel section.collapsed > :not(.section-heading) {
+  display: none;
+}
+.resume-upload {
+  display: grid;
+  gap: 8px;
+}
+.resume-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.resume-upload input[type="file"] {
+  font-size: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.resume-current {
+  font-size: 12px;
+  color: var(--accent-strong);
+  word-break: break-word;
+}
 .secondary-button {
   min-height: 30px;
   padding: 5px 9px;

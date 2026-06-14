@@ -17,6 +17,10 @@ const profileFields = document.querySelector("#profile-fields");
 const profileMessage = document.querySelector("#profile-message");
 const editProfileButton = document.querySelector("#edit-profile-button");
 const cancelProfileButton = document.querySelector("#cancel-profile-button");
+const resumeFileInput = document.querySelector("#resume-file");
+const uploadResumeButton = document.querySelector("#upload-resume-button");
+const resumeCurrent = document.querySelector("#resume-current");
+const sectionCollapseButtons = Array.from(document.querySelectorAll(".section-collapse"));
 const commonAnswersForm = document.querySelector("#common-answers-form");
 const commonAnswerFieldsEl = document.querySelector("#common-answer-fields");
 const commonAnswersMessage = document.querySelector("#common-answers-message");
@@ -465,10 +469,71 @@ async function openProfileEditor(focusName) {
   if (target) target.focus();
 }
 
+function resumeFilenameFromPath(path) {
+  const text = String(path || "").trim();
+  if (!text) return "";
+  return text.split(/[\\/]/).pop();
+}
+
+function renderResumeCurrent() {
+  if (!resumeCurrent) return;
+  const name = resumeFilenameFromPath(currentProfile.resume_path);
+  resumeCurrent.textContent = name ? `Current resume: ${name}` : "No resume uploaded.";
+}
+
+async function uploadResume() {
+  if (!resumeFileInput) return;
+  const file = resumeFileInput.files && resumeFileInput.files[0];
+  if (!file) {
+    showProfileMessage("Choose a resume file to upload.", true);
+    return;
+  }
+  if (uploadResumeButton) uploadResumeButton.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/applicant-profile/upload-resume?filename=${encodeURIComponent(file.name)}`,
+      { method: "POST", body: file }
+    );
+    const result = await response.json().catch(() => ({ error: "Could not upload resume." }));
+    if (!response.ok) {
+      showProfileMessage(result.error || "Could not upload resume.", true);
+      return;
+    }
+    if (resumeFileInput) resumeFileInput.value = "";
+    await loadProfile();
+    const warning = (result.warnings || [])[0];
+    showProfileMessage(warning || `Uploaded ${result.resume_filename}.`, Boolean(warning));
+  } catch (error) {
+    showProfileMessage("Could not upload resume.", true);
+  } finally {
+    if (uploadResumeButton) uploadResumeButton.disabled = false;
+  }
+}
+
+function applySectionCollapsed(section, button, collapsed) {
+  section.classList.toggle("collapsed", collapsed);
+  button.textContent = collapsed ? "Show" : "Hide";
+  button.setAttribute("aria-expanded", String(!collapsed));
+}
+
+function setupCollapsibleSection(button) {
+  const sectionId = button.dataset.section;
+  const section = sectionId ? document.getElementById(sectionId) : null;
+  if (!section) return;
+  const storageKey = `jobfind.section.${sectionId}.collapsed`;
+  applySectionCollapsed(section, button, localStorage.getItem(storageKey) === "1");
+  button.addEventListener("click", () => {
+    const next = !section.classList.contains("collapsed");
+    localStorage.setItem(storageKey, next ? "1" : "0");
+    applySectionCollapsed(section, button, next);
+  });
+}
+
 async function loadProfile() {
   const profile = await fetchJson("/api/applicant-profile");
   currentProfile = profile;
   renderProfileForm(currentProfile);
+  renderResumeCurrent();
   const rows = Object.entries(profile).filter(([, value]) => profileValueText(value).trim());
   if (!rows.length) {
     profileList.innerHTML = "<li>Add your info to applicant_profile.json.</li>";
@@ -747,6 +812,8 @@ if (cancelProfileButton) {
   });
 }
 if (profileForm) profileForm.addEventListener("submit", saveProfile);
+if (uploadResumeButton) uploadResumeButton.addEventListener("click", uploadResume);
+sectionCollapseButtons.forEach(setupCollapsibleSection);
 if (commonAnswersForm) commonAnswersForm.addEventListener("submit", saveCommonAnswers);
 if (useSuggestionButton) useSuggestionButton.addEventListener("click", useSuggestion);
     if (dismissSuggestionButton) {

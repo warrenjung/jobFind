@@ -83,10 +83,13 @@
           </div>
           <pre class="autofill-log" id="autofill-log"></pre>
         </section>
-        <section>
+        <section id="common-answers-section">
           <div class="section-heading">
             <h2>Common Answers</h2>
-            <button class="secondary-button" type="submit" form="common-answers-form">Save</button>
+            <div class="section-actions">
+              <button class="secondary-button" type="submit" form="common-answers-form">Save</button>
+              <button class="secondary-button section-collapse" type="button" data-section="common-answers-section">Hide</button>
+            </div>
           </div>
           <p class="profile-message" id="common-answers-message">Used by autofill for repeated application questions.</p>
           <form class="common-answers" id="common-answers-form">
@@ -110,12 +113,22 @@
             <article class="saved-answer-card">Loading saved answers...</article>
           </div>
         </section>
-        <section>
+        <section id="profile-section">
           <div class="section-heading">
             <h2>Profile</h2>
-            <button class="secondary-button" type="button" id="edit-profile-button">Edit Profile</button>
+            <div class="section-actions">
+              <button class="secondary-button" type="button" id="edit-profile-button">Edit Profile</button>
+              <button class="secondary-button section-collapse" type="button" data-section="profile-section">Hide</button>
+            </div>
           </div>
           <p class="profile-message" id="profile-message"></p>
+          <div class="resume-upload">
+            <span class="resume-current" id="resume-current">No resume uploaded.</span>
+            <div class="resume-upload-actions">
+              <input type="file" id="resume-file" accept=".pdf,.doc,.docx,.txt,.rtf">
+              <button class="secondary-button" type="button" id="upload-resume-button">Upload résumé</button>
+            </div>
+          </div>
           <form class="profile-editor hidden" id="profile-form">
             <div id="profile-fields"></div>
             <div class="profile-form-actions">

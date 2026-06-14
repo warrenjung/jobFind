@@ -1021,3 +1021,106 @@ class TestStaticFrontend:
         # Only known names are served (no arbitrary paths).
         for _, (name, _ctype) in lss.STATIC_FILES.items():
             assert name in {"index.html", "app.css", "app.js"}
+
+
+class TestReadBinaryBody:
+    def test_enforces_cap(self):
+        class DummyHandler:
+            headers = {"Content-Length": "10"}
+            rfile = io.BytesIO(b"0123456789")
+
+        data, error = lss.SearchHandler.read_binary_body(DummyHandler(), 5)
+        assert data == b""
+        assert "too large" in error
+
+    def test_reads_bytes(self):
+        class DummyHandler:
+            headers = {"Content-Length": "5"}
+            rfile = io.BytesIO(b"hello")
+
+        data, error = lss.SearchHandler.read_binary_body(DummyHandler(), 100)
+        assert data == b"hello"
+        assert error is None
+
+    def test_rejects_empty_body(self):
+        class DummyHandler:
+            headers = {"Content-Length": "0"}
+            rfile = io.BytesIO(b"")
+
+        data, error = lss.SearchHandler.read_binary_body(DummyHandler(), 100)
+        assert data == b""
+        assert "empty" in error
+
+
+class TestResumeUpload:
+    def _handler(self, path, binary_result):
+        class DummyHandler:
+            def __init__(self):
+                self.sent = None
+
+            def read_binary_body(self, _max_bytes):
+                return binary_result
+
+            def send_json(self, payload, status=200):
+                self.sent = (payload, status)
+
+        handler = DummyHandler()
+        handler.path = path
+        return handler
+
+    def test_upload_saves_file_and_updates_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lss, "RESUMES_DIR", tmp_path / "resumes")
+        monkeypatch.setattr(lss, "PROFILE_FILE", tmp_path / "profile.json")
+        handler = self._handler(
+            "/api/applicant-profile/upload-resume?filename=Alex%20Resume.pdf",
+            (b"%PDF-1.4 data", None),
+        )
+
+        lss.SearchHandler.handle_resume_upload(handler)
+
+        payload, status = handler.sent
+        assert status == 200
+        assert payload["resume_filename"] == "Alex_Resume.pdf"
+        saved = tmp_path / "resumes" / "Alex_Resume.pdf"
+        assert saved.read_bytes() == b"%PDF-1.4 data"
+        assert payload["resume_path"] == str(saved.resolve())
+        assert payload["profile"]["resume_path"] == str(saved.resolve())
+        # File exists, so there is no missing-resume warning.
+        assert payload["warnings"] == []
+
+    def test_upload_rejects_bad_extension_before_reading_body(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lss, "RESUMES_DIR", tmp_path / "resumes")
+        read_called = {"value": False}
+
+        class DummyHandler:
+            path = "/api/applicant-profile/upload-resume?filename=evil.exe"
+
+            def __init__(self):
+                self.sent = None
+
+            def read_binary_body(self, _max_bytes):
+                read_called["value"] = True
+                return b"x", None
+
+            def send_json(self, payload, status=200):
+                self.sent = (payload, status)
+
+        handler = DummyHandler()
+        lss.SearchHandler.handle_resume_upload(handler)
+
+        assert handler.sent[1] == 400
+        assert read_called["value"] is False
+        assert not (tmp_path / "resumes").exists()
+
+    def test_upload_propagates_oversized_body_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lss, "RESUMES_DIR", tmp_path / "resumes")
+        handler = self._handler(
+            "/api/applicant-profile/upload-resume?filename=ok.pdf",
+            (b"", "Uploaded file is too large."),
+        )
+
+        lss.SearchHandler.handle_resume_upload(handler)
+
+        assert handler.sent[1] == 400
+        assert "too large" in handler.sent[0]["error"]
+        assert not (tmp_path / "resumes").exists()

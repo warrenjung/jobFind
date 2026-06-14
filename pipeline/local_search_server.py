@@ -23,6 +23,7 @@ import requests
 import saved_answers
 import server_ai
 import server_profile
+import utils
 
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -31,6 +32,9 @@ STATIC_DIR = Path(__file__).parent / "app_static"
 PIPELINE_SCRIPT = REPO_ROOT / "pipeline" / "run_job_pipeline.py"
 RESULTS_FILE = DATA_DIR / "jobs_clean.html"
 PROFILE_FILE = REPO_ROOT / "applicant_profile.json"
+RESUMES_DIR = REPO_ROOT / "resumes"
+RESUME_MAX_BYTES = 5_000_000
+ALLOWED_RESUME_EXTS = {".pdf", ".doc", ".docx", ".txt", ".rtf"}
 APPLICATIONS_FILE = DATA_DIR / "applications_status.json"
 SAVED_ANSWERS_FILE = DATA_DIR / "saved_answers.json"
 SAVED_ANSWERS_MD_FILE = DATA_DIR / "saved_answers.md"
@@ -1017,6 +1021,9 @@ class SearchHandler(BaseHTTPRequestHandler):
             profile, warnings = save_applicant_profile_updates(payload)
             self.send_json({"profile": profile, "warnings": warnings})
             return
+        if path == "/api/applicant-profile/upload-resume":
+            self.handle_resume_upload()
+            return
         if path == "/api/common-answers":
             payload, error = self.read_json_body()
             if error:
@@ -1199,6 +1206,46 @@ class SearchHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             return {}, "Request body must be a JSON object."
         return payload, None
+
+    def read_binary_body(self, max_bytes: int) -> tuple[bytes, Optional[str]]:
+        """Read a raw binary request body (e.g. an uploaded file)."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            return b"", "Request body is empty."
+        if length > max_bytes:
+            return b"", "Uploaded file is too large."
+        data = self.rfile.read(length)
+        if not data:
+            return b"", "Request body is empty."
+        return data, None
+
+    def handle_resume_upload(self) -> None:
+        """Save an uploaded resume file and point the profile at it."""
+        query = parse_qs(urlparse(self.path).query)
+        raw_name = (query.get("filename") or [""])[0]
+        filename = utils.safe_resume_filename(raw_name, ALLOWED_RESUME_EXTS)
+        if not filename:
+            self.send_json(
+                {"error": "Unsupported file. Use PDF, DOC, DOCX, TXT, or RTF."},
+                status=400,
+            )
+            return
+        data, error = self.read_binary_body(RESUME_MAX_BYTES)
+        if error:
+            self.send_json({"error": error}, status=400)
+            return
+        destination = RESUMES_DIR / filename
+        utils.atomic_write_bytes(destination, data)
+        resume_path = str(destination.resolve())
+        profile, warnings = save_applicant_profile_updates({"resume_path": resume_path})
+        self.send_json(
+            {
+                "profile": profile,
+                "resume_path": resume_path,
+                "resume_filename": filename,
+                "warnings": warnings,
+            }
+        )
 
     def send_static_file(self, name: str, content_type: str) -> None:
         file_path = STATIC_DIR / name
