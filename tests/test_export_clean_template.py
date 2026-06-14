@@ -35,6 +35,18 @@ class TestBuildControls:
         assert "<option>Indeed</option>" in controls
 
 
+class TestStatusStyling:
+    def test_status_palette_has_distinct_classes(self):
+        assert "--status-progress" in ect.PAGE_CSS
+        assert "--status-applied" in ect.PAGE_CSS
+        assert "--status-follow" in ect.PAGE_CSS
+        assert "--status-skipped" in ect.PAGE_CSS
+        assert ".application-status.in-progress" in ect.PAGE_CSS
+        assert ".application-status.applied" in ect.PAGE_CSS
+        assert ".application-status.follow-up" in ect.PAGE_CSS
+        assert ".application-status.skipped" in ect.PAGE_CSS
+
+
 class TestTimestamp:
     def test_timestamp_is_nonempty_string(self):
         assert isinstance(ect.generated_timestamp(), str)

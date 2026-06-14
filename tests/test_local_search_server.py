@@ -98,6 +98,25 @@ class TestApplicationTracking:
         assert application is None
         assert error is not None
 
+    def test_opening_job_does_not_downgrade_applied_status(self, tmp_path, monkeypatch):
+        status_file = tmp_path / "applications_status.json"
+        monkeypatch.setattr(lss, "APPLICATIONS_FILE", status_file)
+        job = {
+            "url": "https://www.indeed.com/viewjob?jk=abc",
+            "title": "Cashier",
+            "company": "Example Market",
+        }
+
+        applied, error = lss.upsert_application(job, "Applied")
+        reopened, reopen_error = lss.upsert_application(job, "Opened")
+
+        assert error is None
+        assert reopen_error is None
+        assert applied["status"] == "Applied"
+        assert reopened["status"] == "Applied"
+        saved = json.loads(status_file.read_text())
+        assert saved["applications"][0]["status"] == "Applied"
+
 
 class TestSavedAnswers:
     def test_save_overlay_answer_writes_json_and_markdown(self, tmp_path, monkeypatch):

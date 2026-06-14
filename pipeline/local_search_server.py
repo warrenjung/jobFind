@@ -72,6 +72,11 @@ APPLICATION_STATUSES = {
     "Skipped",
     "Needs follow-up",
 }
+PRESERVED_APPLICATION_STATUSES = {
+    "Applied",
+    "Skipped",
+    "Needs follow-up",
+}
 OVERLAY_MUTATION_ROUTES = {
     "/api/applications/autofill/overlay-resume",
     "/api/saved-answers",
@@ -828,6 +833,13 @@ def upsert_application(
     for key, value in job.items():
         if value:
             record[key] = value
+    if status == "Opened" and record.get("status") in PRESERVED_APPLICATION_STATUSES:
+        record["updated_at"] = now
+        if notes is not None:
+            record["notes"] = clean_payload_text(notes, 2000)
+        records[job["url"]] = record
+        save_application_records(records)
+        return record, None
     record["status"] = status
     record["updated_at"] = now
     if status == "Opened" and not record.get("opened_at"):

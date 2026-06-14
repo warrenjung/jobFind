@@ -72,6 +72,8 @@ class TestApplyLinks:
     def test_html_apply_link_valid(self):
         out = ect.format_html_apply_link("https://www.indeed.com/viewjob?jk=1")
         assert out.startswith("<a") and "Apply" in out
+        assert 'target="_blank"' in out
+        assert 'rel="noopener"' in out
 
     def test_html_apply_link_rejects_non_http(self):
         out = ect.format_html_apply_link("javascript:alert(1)")
@@ -108,6 +110,11 @@ class TestBuildHtml:
         assert "Jobs near Cupertino, CA" in out
         assert "Postings from the last 14 days" in out
         assert 'id="job-search"' in out
+        assert 'id="application-status"' in out
+        assert 'data-url="https://x/viewjob?jk=1"' in out
+        assert 'data-application-status="need-to-apply"' in out
+        assert "Need to apply" in out
+        assert "jobfind:apply-assistant" in out
         assert 'data-pay="20"' in out
         assert "data-score" in out
 

@@ -343,6 +343,14 @@ def format_apply_assistant_button(job: dict[str, Any]) -> str:
     return f'<button class="assistant-button" type="button" {data_attrs}>Apply Assistant</button>'
 
 
+def job_url(job: dict[str, Any]) -> str:
+    """Return the job apply URL when present."""
+    url = clean_text(job.get("url"))
+    if url == NOT_SPECIFIED:
+        return ""
+    return url
+
+
 def summary_text(
     shown_count: int,
     min_score: Optional[float],
@@ -407,6 +415,8 @@ def build_html_cards(
         cards.append(
             f"""
       <article class="job-card"
+        data-url="{html.escape(job_url(job), quote=True)}"
+        data-application-status="need-to-apply"
         data-score="{job_score(job) or 0:g}"
         data-pay="{sortable_pay(job):g}"
         data-pay-known="{"1" if has_sortable_pay(job) else "0"}"
@@ -418,6 +428,7 @@ def build_html_cards(
         <div class="card-topline">
           <span class="rank">#{index}</span>
           {source_badge}
+          <span class="application-status need-to-apply">Need to apply</span>
           <span class="score">Score {html_text(job.get("student_fit_score"))}</span>
         </div>
         <h2>{title}</h2>

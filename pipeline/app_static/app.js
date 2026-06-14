@@ -55,6 +55,7 @@ let suggestionTargetKey = "";
 let setupStatus = null;
 const setupPreferenceKey = "jobfind.setup.open";
 const setupOrder = ["profile", "resume", "indeed_login", "results"];
+const preservedApplicationStatuses = new Set(["Applied", "Skipped", "Needs follow-up"]);
 const profileFieldDefs = [
   { key: "name", label: "Name" },
   { key: "first_name", label: "First name" },
@@ -576,6 +577,25 @@ async function loadApplications() {
         <li><strong>${escapeText(row.status)}</strong> · ${escapeText(row.title || "Untitled job")}<br>${escapeText(row.company || "")}</li>
       `).join("")
     : "<li>No applications tracked yet.</li>";
+  syncResultsApplicationStatuses(rows);
+  return rows;
+}
+
+function syncResultsApplicationStatuses(rows) {
+  if (!frame || !frame.contentWindow) return;
+  frame.contentWindow.postMessage({
+    type: "jobfind:application-statuses",
+    applications: Array.isArray(rows) ? rows : []
+  }, "*");
+}
+
+async function broadcastApplicationStatuses() {
+  try {
+    const payload = await fetchJson("/api/applications");
+    syncResultsApplicationStatuses(payload.applications || []);
+  } catch (error) {
+    // The result page should still work without application status badges.
+  }
 }
 
 function renderSelectedJob(record) {
@@ -653,10 +673,35 @@ async function saveApplicationStatus(status) {
   await loadApplications();
 }
 
+async function markSelectedApplicationStatus(status, options = {}) {
+  if (!selectedJob) return null;
+  if (options.preserveFinal && preservedApplicationStatuses.has(selectedJob.status || "")) {
+    await loadApplications();
+    return selectedJob;
+  }
+  const response = await fetch("/api/applications/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...selectedJob,
+      status,
+      notes: notesEl ? notesEl.value : ""
+    })
+  });
+  const payload = await response.json().catch(() => ({ error: "Could not update application status." }));
+  if (!response.ok) {
+    renderSelectedJob({ ...selectedJob, status: payload.error || "Error" });
+    return null;
+  }
+  renderSelectedJob(payload.application);
+  await loadApplications();
+  return payload.application;
+}
+
 async function openApplyAssistant(job) {
   selectedJob = job;
-  renderSelectedJob({ ...job, status: "Opened" });
-  window.open(job.url, "_blank", "noopener");
+  const initialStatus = preservedApplicationStatuses.has(job.status || "") ? job.status : "Opened";
+  renderSelectedJob({ ...job, status: initialStatus });
   const response = await fetch("/api/applications/open", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -690,6 +735,7 @@ async function startAutofillRequest(resume) {
     if (autofillSummary) autofillSummary.textContent = payload.error || "Could not start autofill.";
     return;
   }
+  await markSelectedApplicationStatus("Autofilled", { preserveFinal: true });
   await refreshAutofillStatus();
   autofillPollTimer = setInterval(refreshAutofillStatus, 1500);
 }
@@ -855,9 +901,16 @@ if (resumeAutofillButton) resumeAutofillButton.addEventListener("click", resumeA
 if (indeedLoginButton) indeedLoginButton.addEventListener("click", openIndeedLogin);
 
 window.addEventListener("message", event => {
-  if (!event.data || event.data.type !== "jobfind:apply-assistant") return;
-  openApplyAssistant(event.data.job);
+  if (!event.data) return;
+  if (event.data.type === "jobfind:apply-assistant") {
+    openApplyAssistant(event.data.job);
+  }
+  if (event.data.type === "jobfind:application-status-request") {
+    broadcastApplicationStatuses();
+  }
 });
+
+if (frame) frame.addEventListener("load", broadcastApplicationStatuses);
 
 refreshStatus();
 refreshAutofillStatus();

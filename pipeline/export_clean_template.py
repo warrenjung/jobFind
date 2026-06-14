@@ -19,6 +19,14 @@ PAGE_CSS = """
       --accent: #126b62;
       --accent-strong: #0b4f49;
       --accent-soft: #e8f3f1;
+      --status-progress: #285f8f;
+      --status-progress-soft: #e7f0f8;
+      --status-applied: #2d7653;
+      --status-applied-soft: #e5f3eb;
+      --status-follow: #8f5f13;
+      --status-follow-soft: #fff3d6;
+      --status-skipped: #515c5a;
+      --status-skipped-soft: #e8eceb;
       --shadow: 0 10px 24px rgba(24, 38, 36, 0.08);
     }
 
@@ -142,6 +150,12 @@ PAGE_CSS = """
       padding: 16px;
       box-shadow: var(--shadow);
       min-width: 0;
+      transition: opacity 0.15s ease, background 0.15s ease;
+    }
+
+    .job-card.application-muted {
+      opacity: 0.68;
+      background: #f9fbfa;
     }
 
     .card-topline {
@@ -187,6 +201,52 @@ PAGE_CSS = """
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0;
+    }
+
+    .application-status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #f1f4f3;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .application-status.need-to-apply {
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+    }
+
+    .application-status.applied {
+      background: var(--status-applied-soft);
+      color: var(--status-applied);
+    }
+
+    .application-status.follow-up {
+      background: var(--status-follow-soft);
+      color: var(--status-follow);
+    }
+
+    .application-status.skipped {
+      background: var(--status-skipped-soft);
+      color: var(--status-skipped);
+    }
+
+    .application-status.in-progress {
+      background: var(--status-progress-soft);
+      color: var(--status-progress);
+    }
+
+    .application-counts {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
     }
 
     .empty {
@@ -319,16 +379,116 @@ PAGE_SCRIPT = """
       const minPay = document.getElementById('min-pay');
       const jobType = document.getElementById('job-type');
       const jobSource = document.getElementById('job-source');
+      const applicationStatus = document.getElementById('application-status');
       const maxDistance = document.getElementById('max-distance');
       const sortSelect = document.getElementById('job-sort');
       const section = document.querySelector('.jobs');
       const noMatch = document.getElementById('no-match');
       const countEl = document.getElementById('job-count');
+      const applicationCounts = document.getElementById('application-counts');
       if (!section) return;
       const cards = Array.from(section.querySelectorAll('.job-card'));
       const assistantButtons = Array.from(document.querySelectorAll('.assistant-button'));
       const num = (el, key) => parseFloat(el.getAttribute('data-' + key)) || 0;
       const hasValue = (el, key) => el.getAttribute('data-' + key + '-known') === '1';
+      const statusLabels = {
+        'need-to-apply': 'Need to apply',
+        opened: 'Opened',
+        autofilled: 'Autofilled',
+        applied: 'Applied',
+        skipped: 'Skipped',
+        'follow-up': 'Follow up'
+      };
+      const statusValues = {
+        'need-to-apply': '',
+        opened: 'Opened',
+        autofilled: 'Autofilled',
+        applied: 'Applied',
+        skipped: 'Skipped',
+        'follow-up': 'Needs follow-up'
+      };
+      const statusBuckets = {
+        'need-to-apply': 'need-to-apply',
+        opened: 'in-progress',
+        autofilled: 'in-progress',
+        applied: 'applied',
+        skipped: 'skipped',
+        'follow-up': 'follow-up'
+      };
+
+      function normalizeUrl(value) {
+        return String(value || '').trim();
+      }
+
+      function normalizeStatus(value) {
+        const raw = String(value || '').trim().toLowerCase();
+        if (raw === 'applied') return 'applied';
+        if (raw === 'skipped') return 'skipped';
+        if (raw === 'needs follow-up' || raw === 'follow up' || raw === 'follow-up') return 'follow-up';
+        if (raw === 'autofilled') return 'autofilled';
+        if (raw === 'opened') return 'opened';
+        return 'need-to-apply';
+      }
+
+      function renderStatusBadge(card, status) {
+        const normalized = normalizeStatus(status);
+        const badge = card.querySelector('.application-status');
+        card.dataset.applicationStatus = normalized;
+        card.dataset.applicationBucket = statusBuckets[normalized] || 'need-to-apply';
+        card.classList.toggle('application-muted', normalized === 'applied' || normalized === 'skipped');
+        if (!badge) return;
+        badge.className = 'application-status ' + (statusBuckets[normalized] || normalized);
+        badge.textContent = statusLabels[normalized] || 'Need to apply';
+      }
+
+      function updateApplicationCounts() {
+        if (!applicationCounts) return;
+        const totals = { need: 0, progress: 0, applied: 0, follow: 0, skipped: 0 };
+        cards.forEach(card => {
+          const bucket = card.dataset.applicationBucket || 'need-to-apply';
+          if (bucket === 'need-to-apply') totals.need++;
+          else if (bucket === 'in-progress') totals.progress++;
+          else if (bucket === 'applied') totals.applied++;
+          else if (bucket === 'follow-up') totals.follow++;
+          else if (bucket === 'skipped') totals.skipped++;
+        });
+        applicationCounts.textContent = [
+          totals.need + ' need to apply',
+          totals.progress + ' in progress',
+          totals.applied + ' applied',
+          totals.follow + ' follow-up',
+          totals.skipped + ' skipped'
+        ].join(' · ');
+      }
+
+      function applyApplicationStatuses(rows) {
+        const records = new Map();
+        (Array.isArray(rows) ? rows : []).forEach(row => {
+          const url = normalizeUrl(row && row.url);
+          if (url) records.set(url, normalizeStatus(row.status));
+        });
+        cards.forEach(card => {
+          const url = normalizeUrl(card.dataset.url);
+          renderStatusBadge(card, records.get(url) || 'need-to-apply');
+        });
+        updateApplicationCounts();
+        apply();
+      }
+
+      function requestApplicationStatuses() {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'jobfind:application-status-request' }, '*');
+          return;
+        }
+        if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+          fetch('/api/applications', { cache: 'no-store' })
+            .then(response => response.ok ? response.json() : null)
+            .then(payload => {
+              if (payload) applyApplicationStatuses(payload.applications || []);
+            })
+            .catch(() => {});
+        }
+      }
 
       function apply() {
         const q = ((search && search.value) || '').trim().toLowerCase();
@@ -338,16 +498,18 @@ PAGE_SCRIPT = """
         const distanceFilterOn = Number.isFinite(distanceValue);
         const typeValue = (jobType && jobType.value) || '';
         const sourceValue = (jobSource && jobSource.value) || '';
+        const applicationValue = (applicationStatus && applicationStatus.value) || '';
         let visible = 0;
         cards.forEach(card => {
           const textHit = !q || (card.getAttribute('data-text') || '').includes(q);
           const payHit = !payFilterOn || (hasValue(card, 'pay') && num(card, 'pay') >= payValue);
           const typeHit = !typeValue || card.getAttribute('data-job-type') === typeValue;
           const sourceHit = !sourceValue || card.getAttribute('data-source') === sourceValue;
+          const applicationHit = !applicationValue || card.dataset.applicationBucket === applicationValue;
           const distanceHit = !distanceFilterOn || (
             hasValue(card, 'distance') && num(card, 'distance') <= distanceValue
           );
-          const hit = textHit && payHit && typeHit && sourceHit && distanceHit;
+          const hit = textHit && payHit && typeHit && sourceHit && applicationHit && distanceHit;
           card.hidden = !hit;
           if (hit) visible++;
         });
@@ -366,6 +528,7 @@ PAGE_SCRIPT = """
       if (minPay) minPay.addEventListener('input', apply);
       if (jobType) jobType.addEventListener('change', apply);
       if (jobSource) jobSource.addEventListener('change', apply);
+      if (applicationStatus) applicationStatus.addEventListener('change', apply);
       if (maxDistance) maxDistance.addEventListener('change', apply);
       if (sortSelect) sortSelect.addEventListener('change', apply);
       assistantButtons.forEach(button => {
@@ -375,7 +538,8 @@ PAGE_SCRIPT = """
             title: button.dataset.title || '',
             company: button.dataset.company || '',
             source: button.dataset.source || '',
-            score: button.dataset.score || ''
+            score: button.dataset.score || '',
+            status: button.closest('.job-card') ? statusValues[button.closest('.job-card').dataset.applicationStatus] || '' : ''
           };
           if (window.parent && window.parent !== window) {
             window.parent.postMessage({ type: 'jobfind:apply-assistant', job }, window.location.origin);
@@ -384,6 +548,12 @@ PAGE_SCRIPT = """
           }
         });
       });
+      window.addEventListener('message', event => {
+        if (!event.data || event.data.type !== 'jobfind:application-statuses') return;
+        applyApplicationStatuses(event.data.applications || []);
+      });
+      cards.forEach(card => renderStatusBadge(card, 'need-to-apply'));
+      requestApplicationStatuses();
       apply();
     })();
   </script>"""
@@ -416,6 +586,16 @@ def build_controls_html(source_options_html: str) -> str:
           {source_options_html}
         </select>
       </label>
+      <label>Application status
+        <select id="application-status">
+          <option value="">Any status</option>
+          <option value="need-to-apply">Need to apply</option>
+          <option value="in-progress">In progress</option>
+          <option value="applied">Applied</option>
+          <option value="skipped">Skipped</option>
+          <option value="follow-up">Follow up</option>
+        </select>
+      </label>
       <label>Max distance
         <select id="max-distance">
           <option value="">Any distance</option>
@@ -435,6 +615,7 @@ def build_controls_html(source_options_html: str) -> str:
         </select>
       </label>
       <span class="count" id="job-count"></span>
+      <span class="application-counts" id="application-counts"></span>
     </section>"""
 
 
