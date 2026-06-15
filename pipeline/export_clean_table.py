@@ -403,6 +403,10 @@ def build_html_cards(
                 detail_row("Type", html_text(format_type_schedule(job))),
                 detail_row("Job Description", html_text(clean_description(job))),
                 detail_row("Why it fits", html_text(why_it_fits(job))),
+                detail_row(
+                    "Matches your keywords",
+                    html_text(", ".join(job.get("matched_personal_keywords") or [])),
+                ),
                 detail_row("Pay", html_text(job.get("pay"))),
                 detail_row("Distance", html_text(format_distance(job.get("distance_miles")))),
                 detail_row("Link to Apply", format_html_apply_link(job.get("url"))),

@@ -128,3 +128,22 @@ class TestBuildHtml:
         out = ect.build_html_cards([], None, 50, location="Nowhere, ZZ")
         assert "No jobs matched" in out
         assert 'id="job-search"' not in out
+
+
+class TestMatchedPersonalKeywords:
+    def _job(self, matched):
+        return {
+            "student_fit_score": 80,
+            "title": "Barista",
+            "company": "Cafe",
+            "matched_personal_keywords": matched,
+        }
+
+    def test_row_shown_when_keywords_matched(self):
+        out = ect.build_html_cards([self._job(["barista", "tutoring"])], None, 50)
+        assert "Matches your keywords" in out
+        assert "barista, tutoring" in out
+
+    def test_row_absent_when_no_match(self):
+        out = ect.build_html_cards([self._job([])], None, 50)
+        assert "Matches your keywords" not in out

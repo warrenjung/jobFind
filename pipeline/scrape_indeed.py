@@ -52,6 +52,28 @@ USER_AGENTS = [
 ]
 
 
+def build_query_list(
+    queries: Optional[list[str]],
+    extra_queries: Optional[list[str]] = None,
+) -> list[str]:
+    """Combine the base queries with user extras, deduped case-insensitively.
+
+    Falls back to SEARCH_QUERIES when no base queries are given. The base queries
+    keep their order and come first; extras are appended in order, skipping any
+    that duplicate an existing term (ignoring case/surrounding whitespace).
+    """
+    combined: list[str] = []
+    seen: set[str] = set()
+    for query in [*(queries or SEARCH_QUERIES), *(extra_queries or [])]:
+        text = re.sub(r"\s+", " ", str(query).strip())
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        combined.append(text)
+    return combined
+
+
 def make_search_url(
     query: str, location: str, radius: int, start: int, fromage: int = 14
 ) -> str:
@@ -342,6 +364,12 @@ def main() -> None:
         help="Search queries (default: built-in teen-friendly list)",
     )
     parser.add_argument(
+        "--extra-queries",
+        nargs="*",
+        default=None,
+        help="Extra search queries (e.g. a user's preferred keywords) appended to the base list.",
+    )
+    parser.add_argument(
         "--fromage",
         type=int,
         default=14,
@@ -349,7 +377,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    queries = args.queries or SEARCH_QUERIES
+    queries = build_query_list(args.queries, args.extra_queries)
     print(f"Scraping Indeed: {args.location}, radius={args.radius}mi, {args.pages} pages × {len(queries)} queries")
 
     jobs = scrape_with_playwright(args.location, args.radius, args.pages, queries, args.fromage)

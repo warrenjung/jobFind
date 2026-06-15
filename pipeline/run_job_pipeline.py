@@ -38,6 +38,7 @@ CAREERONESTOP_SCRAPER = _HERE / "careeronestop_scraper.py"
 CLEAN_TABLE_EXPORTER = _HERE / "export_clean_table.py"
 
 
+from rank_jobs import parse_personal_keywords
 from utils import slugify_location
 
 
@@ -86,6 +87,7 @@ def scrape_indeed(
     pages: int,
     queries: Optional[list[str]],
     fromage: int,
+    extra_queries: Optional[list[str]] = None,
 ) -> Path:
     """Run the Playwright-based Indeed scraper and return the output JSON path."""
     if not INDEED_SCRAPER.exists():
@@ -107,6 +109,8 @@ def scrape_indeed(
     ]
     if queries:
         command.extend(["--queries", *queries])
+    if extra_queries:
+        command.extend(["--extra-queries", *extra_queries])
     run_command(command)
     return output_json
 
@@ -378,6 +382,7 @@ def main() -> None:
             args.indeed_pages,
             args.indeed_queries,
             args.indeed_fromage,
+            extra_queries=parse_personal_keywords(args.personal_keywords),
         )
         indeed_csv = ensure_indeed_csv(
             location_slug,

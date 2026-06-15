@@ -3,6 +3,27 @@
 import scrape_indeed as si
 
 
+class TestBuildQueryList:
+    def test_defaults_when_no_queries(self):
+        assert si.build_query_list(None, None) == si.SEARCH_QUERIES
+
+    def test_appends_extras_after_base(self):
+        assert si.build_query_list(["cashier"], ["tutoring"]) == ["cashier", "tutoring"]
+
+    def test_dedupes_case_insensitively(self):
+        assert si.build_query_list(["Cashier"], ["cashier", "TUTORING", "tutoring"]) == [
+            "Cashier",
+            "TUTORING",
+        ]
+
+    def test_strips_and_skips_blanks(self):
+        assert si.build_query_list(["host"], ["  barista  ", ""]) == ["host", "barista"]
+
+    def test_extras_dedupe_against_defaults(self):
+        # "barista" is already in SEARCH_QUERIES, so it should not be duplicated.
+        assert si.build_query_list(None, ["barista"]) == si.SEARCH_QUERIES
+
+
 class TestExtractPay:
     def test_hourly_range(self):
         assert si.extract_pay("$21 - $25 an hour") == "$21 - $25 an hour"

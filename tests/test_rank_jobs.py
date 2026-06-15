@@ -72,30 +72,37 @@ class TestPersonalKeywordScoring:
         assert rj.parse_personal_keywords(" Barista, tutoring, barista ") == ["barista", "tutoring"]
 
     def test_blank_personal_keywords_no_score(self):
-        score, reasons = rj.score_personal_keywords(self.JOB, [])
+        score, reasons, matched = rj.score_personal_keywords(self.JOB, [])
 
         assert score == 0
         assert reasons == []
+        assert matched == []
 
     def test_personal_keyword_match_scores_phrase_case_insensitive(self):
-        score, reasons = rj.score_personal_keywords(self.JOB, ["summer camp"])
+        score, reasons, matched = rj.score_personal_keywords(self.JOB, ["summer camp"])
 
         assert score == rj.PERSONAL_KEYWORD_POINTS
         assert reasons == ["+8 personal keyword match: summer camp"]
+        assert matched == ["summer camp"]
 
     def test_personal_keyword_score_is_capped(self):
-        score, reasons = rj.score_personal_keywords(
+        score, reasons, matched = rj.score_personal_keywords(
             self.JOB,
             ["summer", "camp", "tutor", "students"],
         )
 
         assert score == rj.PERSONAL_KEYWORD_CAP
         assert f"score capped at +{rj.PERSONAL_KEYWORD_CAP} for personal keyword matches" in reasons
+        assert matched == ["summer", "camp", "tutor", "students"]
 
     def test_rate_job_includes_personal_keyword_reason(self):
         rated = rj.rate_job(self.JOB, ["tutor"])
 
         assert any("personal keyword match: tutor" in reason for reason in rated["rating_reasons"])
+        assert rated["matched_personal_keywords"] == ["tutor"]
+
+    def test_rate_job_no_keywords_has_empty_matches(self):
+        assert rj.rate_job(self.JOB, [])["matched_personal_keywords"] == []
 
     def test_rank_jobs_accepts_personal_keywords(self):
         jobs = [

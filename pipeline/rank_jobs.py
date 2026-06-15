@@ -330,7 +330,7 @@ def rate_job(
     reasons = ["+20 base score"]
 
     keyword_score, keyword_reasons = score_keywords(job, GOOD_KEYWORDS, cap=35)
-    personal_score, personal_reasons = score_personal_keywords(job, personal_keywords or [])
+    personal_score, personal_reasons, personal_matches = score_personal_keywords(job, personal_keywords or [])
     penalty_score, penalty_reasons = score_keywords(job, BAD_KEYWORDS, cap=None)
     metadata_score, metadata_reasons = score_teen_fit_metadata(job)
     schedule_score, schedule_reasons = score_schedule(job)
@@ -364,6 +364,7 @@ def rate_job(
         "student_fit_score": score,
         "rating_label": label_score(score),
         "rating_reasons": reasons,
+        "matched_personal_keywords": personal_matches,
     }
 
 
@@ -412,24 +413,30 @@ def parse_personal_keywords(value: Any) -> list[str]:
 def score_personal_keywords(
     job: dict[str, Any],
     personal_keywords: list[str],
-) -> tuple[int, list[str]]:
-    """Score user-selected preferred job keywords."""
+) -> tuple[int, list[str], list[str]]:
+    """Score user-selected preferred job keywords.
+
+    Returns the score, the explanation reasons, and the list of keywords that
+    actually matched (for display in the results page).
+    """
     if not personal_keywords:
-        return 0, []
+        return 0, [], []
 
     text = f"{searchable_text(job)} {metadata_text(job)}"
     total = 0
     reasons = []
+    matched = []
     for keyword in personal_keywords:
         if contains_phrase(text, keyword):
             total += PERSONAL_KEYWORD_POINTS
             reasons.append(f"+{PERSONAL_KEYWORD_POINTS} personal keyword match: {keyword}")
+            matched.append(keyword)
 
     if total > PERSONAL_KEYWORD_CAP:
         reasons.append(f"score capped at +{PERSONAL_KEYWORD_CAP} for personal keyword matches")
         total = PERSONAL_KEYWORD_CAP
 
-    return total, reasons
+    return total, reasons, matched
 
 
 def searchable_text(job: dict[str, Any]) -> str:
