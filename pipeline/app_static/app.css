@@ -276,12 +276,7 @@ iframe {
   max-height: calc(100vh - 24px);
   overflow: auto;
 }
-.apply-panel h2 {
-  margin: 0;
-  font-size: 16px;
-  line-height: 1.2;
-}
-.queue-panel h2 {
+.apply-panel h2, .queue-panel h2 {
   margin: 0;
   font-size: 16px;
   line-height: 1.2;

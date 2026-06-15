@@ -144,16 +144,18 @@ function renderProfileForm(profile) {
   }).join("");
 }
 
+function showMessage(element, message, isError = false) {
+  if (!element) return;
+  element.textContent = message || "";
+  element.style.color = isError ? "#a33b2f" : "var(--muted)";
+}
+
 function showCommonAnswersMessage(message, isError = false) {
-  if (!commonAnswersMessage) return;
-  commonAnswersMessage.textContent = message || "";
-  commonAnswersMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
+  showMessage(commonAnswersMessage, message, isError);
 }
 
 function showSavedAnswersMessage(message, isError = false) {
-  if (!savedAnswersMessage) return;
-  savedAnswersMessage.textContent = message || "";
-  savedAnswersMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
+  showMessage(savedAnswersMessage, message, isError);
 }
 
 function savedAnswerEnabled(row) {
@@ -560,9 +562,7 @@ async function suggestReviewAnswer(index) {
 }
 
 function showProfileMessage(message, isError = false) {
-  if (!profileMessage) return;
-  profileMessage.textContent = message || "";
-  profileMessage.style.color = isError ? "#a33b2f" : "var(--muted)";
+  showMessage(profileMessage, message, isError);
 }
 
 function shouldShowSetup(status) {
@@ -982,43 +982,43 @@ document.addEventListener("click", async (event) => {
       if (locationInput) locationInput.focus();
     }
   }
-      const polishButton = event.target.closest("[data-ai-polish]");
-      if (polishButton) {
-        await polishCommonAnswer(polishButton.dataset.aiPolish);
-      }
-      const questionSuggestButton = event.target.closest("[data-question-suggest]");
-      if (questionSuggestButton) {
-        await suggestReviewAnswer(questionSuggestButton.dataset.questionSuggest);
-      }
-      const savedEdit = event.target.closest("[data-saved-edit]");
-      if (savedEdit) {
-        editingSavedAnswerKey = savedEdit.dataset.savedEdit;
-        renderSavedAnswers({ answers: savedAnswers });
-      }
-      const savedCancel = event.target.closest("[data-saved-cancel]");
-      if (savedCancel) {
-        editingSavedAnswerKey = "";
-        renderSavedAnswers({ answers: savedAnswers });
-      }
-      const savedSave = event.target.closest("[data-saved-save]");
-      if (savedSave) {
-        const key = savedSave.dataset.savedSave;
-        const answerField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-answer-edit="${cssEscape(key)}"]`) : null;
-        const enabledField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-enabled-edit="${cssEscape(key)}"]`) : null;
-        await updateSavedAnswer(key, {
-          answer: answerField ? answerField.value : "",
-          autofill_enabled: enabledField ? enabledField.checked : true
-        });
-      }
-      const savedDelete = event.target.closest("[data-saved-delete]");
-      if (savedDelete) {
-        await deleteSavedAnswer(savedDelete.dataset.savedDelete);
-      }
-      const queueSelect = event.target.closest("[data-queue-select]");
-      if (queueSelect) {
-        await selectQueuedApplication(queueSelect.dataset.queueSelect);
-      }
+  const polishButton = event.target.closest("[data-ai-polish]");
+  if (polishButton) {
+    await polishCommonAnswer(polishButton.dataset.aiPolish);
+  }
+  const questionSuggestButton = event.target.closest("[data-question-suggest]");
+  if (questionSuggestButton) {
+    await suggestReviewAnswer(questionSuggestButton.dataset.questionSuggest);
+  }
+  const savedEdit = event.target.closest("[data-saved-edit]");
+  if (savedEdit) {
+    editingSavedAnswerKey = savedEdit.dataset.savedEdit;
+    renderSavedAnswers({ answers: savedAnswers });
+  }
+  const savedCancel = event.target.closest("[data-saved-cancel]");
+  if (savedCancel) {
+    editingSavedAnswerKey = "";
+    renderSavedAnswers({ answers: savedAnswers });
+  }
+  const savedSave = event.target.closest("[data-saved-save]");
+  if (savedSave) {
+    const key = savedSave.dataset.savedSave;
+    const answerField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-answer-edit="${cssEscape(key)}"]`) : null;
+    const enabledField = savedAnswersList ? savedAnswersList.querySelector(`[data-saved-enabled-edit="${cssEscape(key)}"]`) : null;
+    await updateSavedAnswer(key, {
+      answer: answerField ? answerField.value : "",
+      autofill_enabled: enabledField ? enabledField.checked : true
     });
+  }
+  const savedDelete = event.target.closest("[data-saved-delete]");
+  if (savedDelete) {
+    await deleteSavedAnswer(savedDelete.dataset.savedDelete);
+  }
+  const queueSelect = event.target.closest("[data-queue-select]");
+  if (queueSelect) {
+    await selectQueuedApplication(queueSelect.dataset.queueSelect);
+  }
+});
 
 if (savedAnswersList) {
   savedAnswersList.addEventListener("change", async (event) => {
