@@ -47,6 +47,13 @@ class TestStatusStyling:
         assert ".application-status.skipped" in ect.PAGE_CSS
 
 
+class TestResultPublishing:
+    def test_script_publishes_ranked_jobs_to_parent_dashboard(self):
+        assert "collectResultJobs" in ect.PAGE_SCRIPT
+        assert "jobfind:results-jobs" in ect.PAGE_SCRIPT
+        assert "sourceLabel" in ect.PAGE_SCRIPT
+
+
 class TestTimestamp:
     def test_timestamp_is_nonempty_string(self):
         assert isinstance(ect.generated_timestamp(), str)

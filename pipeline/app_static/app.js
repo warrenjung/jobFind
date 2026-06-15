@@ -32,6 +32,7 @@ const savedAnswersList = document.querySelector("#saved-answers-list");
 const savedAnswersMessage = document.querySelector("#saved-answers-message");
 const refreshSavedAnswersButton = document.querySelector("#refresh-saved-answers-button");
 const applicationList = document.querySelector("#application-list");
+const queueSummary = document.querySelector("#queue-summary");
 const applicationButtons = Array.from(document.querySelectorAll("[data-application-status]"));
 const indeedLoginButton = document.querySelector("#indeed-login-button");
 const autofillButton = document.querySelector("#autofill-button");
@@ -50,12 +51,22 @@ let currentProfile = {};
 let commonAnswerFields = [];
 let commonAnswers = {};
 let savedAnswers = [];
+let resultJobs = [];
+let applicationRows = [];
 let editingSavedAnswerKey = "";
 let suggestionTargetKey = "";
 let setupStatus = null;
 const setupPreferenceKey = "jobfind.setup.open";
+const personalKeywordsKey = "jobfind.personalKeywords";
 const setupOrder = ["profile", "resume", "indeed_login", "results"];
 const preservedApplicationStatuses = new Set(["Applied", "Skipped", "Needs follow-up"]);
+const queueGroups = [
+  { key: "next", title: "Next to apply", empty: "No jobs waiting. Run a search or show all jobs to find more." },
+  { key: "progress", title: "In progress", empty: "No applications in progress." },
+  { key: "follow", title: "Follow up", empty: "No follow-ups yet." },
+  { key: "done", title: "Done", empty: "No completed applications yet." },
+  { key: "skipped", title: "Skipped", empty: "No skipped jobs." }
+];
 const profileFieldDefs = [
   { key: "name", label: "Name" },
   { key: "first_name", label: "First name" },
@@ -157,6 +168,140 @@ function savedAnswerMeta(row) {
     row.updated_at ? `Updated: ${row.updated_at}` : ""
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function applicationQueueGroup(status) {
+  if (status === "Applied") return "done";
+  if (status === "Skipped") return "skipped";
+  if (status === "Needs follow-up") return "follow";
+  if (status === "Opened" || status === "Autofilled") return "progress";
+  return "next";
+}
+
+function applicationStatusClass(status) {
+  if (status === "Applied") return "applied";
+  if (status === "Skipped") return "skipped";
+  if (status === "Needs follow-up") return "follow-up";
+  if (status === "Opened" || status === "Autofilled") return "in-progress";
+  return "need-to-apply";
+}
+
+function applicationStatusLabel(status) {
+  if (status === "Needs follow-up") return "Follow up";
+  return status || "Need to apply";
+}
+
+function supportsIndeedAutofill(job) {
+  const source = String((job && job.source) || "").toLowerCase();
+  const url = String((job && job.url) || "").toLowerCase();
+  return source.includes("indeed") || url.includes("indeed.com");
+}
+
+function normalizeQueueUrl(value) {
+  return String(value || "").trim();
+}
+
+function normalizeResultJob(job) {
+  return {
+    url: normalizeQueueUrl(job && job.url),
+    title: String((job && job.title) || "Untitled job"),
+    company: String((job && job.company) || "Unknown employer"),
+    source: String((job && job.source) || ""),
+    score: String((job && job.score) || ""),
+    status: String((job && job.status) || ""),
+    from_results: true
+  };
+}
+
+function mergeQueueRows(applications, jobs) {
+  const applicationMap = new Map();
+  (Array.isArray(applications) ? applications : []).forEach(row => {
+    const url = normalizeQueueUrl(row && row.url);
+    if (url) applicationMap.set(url, row);
+  });
+
+  const merged = [];
+  const seen = new Set();
+  (Array.isArray(jobs) ? jobs : []).map(normalizeResultJob).forEach(job => {
+    if (!job.url || seen.has(job.url)) return;
+    const tracked = applicationMap.get(job.url);
+    merged.push({ ...job, ...(tracked || {}) });
+    seen.add(job.url);
+  });
+
+  applicationMap.forEach((row, url) => {
+    if (!seen.has(url)) merged.push(row);
+  });
+  return merged;
+}
+
+function currentQueueRows() {
+  return mergeQueueRows(applicationRows, resultJobs);
+}
+
+function updateQueueSummary(rows) {
+  if (!queueSummary) return;
+  const totals = { next: 0, progress: 0, follow: 0, done: 0, skipped: 0 };
+  rows.forEach(row => {
+    totals[applicationQueueGroup(row.status)] += 1;
+  });
+  queueSummary.textContent = `${totals.next} next · ${totals.progress} in progress · ${totals.follow} follow-up`;
+}
+
+function renderQueueComplete() {
+  selectedJob = null;
+  applicationButtons.forEach(button => button.disabled = true);
+  if (autofillButton) autofillButton.disabled = true;
+  if (resumeAutofillButton) resumeAutofillButton.disabled = true;
+  if (selectedJobEl) {
+    selectedJobEl.innerHTML = "<strong>Queue complete</strong><p>No remaining jobs need action right now.</p>";
+  }
+}
+
+function renderApplicationQueue(rows) {
+  if (!applicationList) return;
+  const applications = Array.isArray(rows) ? rows : [];
+  updateQueueSummary(applications);
+  if (!applications.length) {
+    applicationList.innerHTML = "<li class=\"queue-empty\">Run a search to fill the queue.</li>";
+    return;
+  }
+  const grouped = Object.fromEntries(queueGroups.map(group => [group.key, []]));
+  applications.forEach(row => {
+    grouped[applicationQueueGroup(row.status)].push(row);
+  });
+  applicationList.innerHTML = queueGroups.map(group => {
+    const items = grouped[group.key] || [];
+    if (!items.length && group.key !== "next") return "";
+    const body = items.length
+      ? items.map(row => {
+          const url = escapeText(row.url || "");
+          const status = applicationStatusLabel(row.status);
+          const selected = selectedJob && normalizeQueueUrl(selectedJob.url) === normalizeQueueUrl(row.url);
+          const meta = [
+            row.source ? row.source : "",
+            row.score ? `Score ${row.score}` : ""
+          ].filter(Boolean).join(" · ");
+          return `
+            <article class="queue-card ${selected ? "current" : ""}" data-queue-url="${url}">
+              <div>
+                <strong>${escapeText(row.title || "Untitled job")}</strong>
+                <span>${escapeText(row.company || "Unknown employer")}</span>
+                ${meta ? `<span class="queue-meta">${escapeText(meta)}</span>` : ""}
+              </div>
+              <span class="queue-status ${applicationStatusClass(row.status)}">${escapeText(status)}</span>
+              <button class="secondary-button" type="button" data-queue-select="${url}">Select</button>
+            </article>
+          `;
+        }).join("")
+      : `<p class="queue-empty">${escapeText(group.empty)}</p>`;
+    return `
+      <li class="queue-group">
+        <h3>${escapeText(group.title)} <span>${items.length}</span></h3>
+        <div class="queue-items">${body}</div>
+      </li>
+    `;
+  }).join("");
 }
 
 function renderSavedAnswers(payload) {
@@ -571,14 +716,10 @@ async function saveProfile(event) {
 
 async function loadApplications() {
   const payload = await fetchJson("/api/applications");
-  const rows = payload.applications || [];
-  applicationList.innerHTML = rows.length
-    ? rows.slice(0, 8).map(row => `
-        <li><strong>${escapeText(row.status)}</strong> · ${escapeText(row.title || "Untitled job")}<br>${escapeText(row.company || "")}</li>
-      `).join("")
-    : "<li>No applications tracked yet.</li>";
-  syncResultsApplicationStatuses(rows);
-  return rows;
+  applicationRows = payload.applications || [];
+  renderApplicationQueue(currentQueueRows());
+  syncResultsApplicationStatuses(applicationRows);
+  return applicationRows;
 }
 
 function syncResultsApplicationStatuses(rows) {
@@ -601,9 +742,11 @@ async function broadcastApplicationStatuses() {
 function renderSelectedJob(record) {
   selectedJob = record;
   applicationButtons.forEach(button => button.disabled = !selectedJob);
-  if (autofillButton) autofillButton.disabled = !selectedJob;
+  const canAutofill = selectedJob && supportsIndeedAutofill(selectedJob);
+  if (autofillButton) autofillButton.disabled = !canAutofill;
   if (!selectedJob) {
     selectedJobEl.innerHTML = "<strong>No job selected</strong><p>Click Apply Assistant on an Indeed job card.</p>";
+    renderApplicationQueue(currentQueueRows());
     return;
   }
   selectedJobEl.innerHTML = `
@@ -614,6 +757,7 @@ function renderSelectedJob(record) {
   if (notesEl && selectedJob.notes !== undefined) {
     notesEl.value = selectedJob.notes || "";
   }
+  renderApplicationQueue(currentQueueRows());
 }
 
 async function refreshAutofillStatus() {
@@ -642,9 +786,10 @@ async function refreshAutofillStatus() {
     autofillLog.scrollTop = autofillLog.scrollHeight;
   }
   renderReviewQuestions(report.current_step_review_items || report.current_step_needs_review || []);
-  if (autofillButton) autofillButton.disabled = !selectedJob || data.status === "running";
+  const canAutofillSelected = selectedJob && supportsIndeedAutofill(selectedJob);
+  if (autofillButton) autofillButton.disabled = !canAutofillSelected || data.status === "running";
   const canResume = needsLogin || needsVerification || ["needs_review", "resume_needs_review", "no_safe_advance"].includes(stoppedReason);
-  if (resumeAutofillButton) resumeAutofillButton.disabled = !selectedJob || data.status === "running" || !canResume;
+  if (resumeAutofillButton) resumeAutofillButton.disabled = !canAutofillSelected || data.status === "running" || !canResume;
   if (data.status !== "running" && autofillPollTimer) {
     clearInterval(autofillPollTimer);
     autofillPollTimer = null;
@@ -655,6 +800,7 @@ async function refreshAutofillStatus() {
 
 async function saveApplicationStatus(status) {
   if (!selectedJob) return;
+  const previousUrl = selectedJob.url || "";
   const response = await fetch("/api/applications/status", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -670,7 +816,38 @@ async function saveApplicationStatus(status) {
     return;
   }
   renderSelectedJob(payload.application);
+  if (preservedApplicationStatuses.has(status)) {
+    await autoSelectNextQueuedJob(previousUrl);
+  } else {
+    await loadApplications();
+  }
+}
+
+async function selectQueuedApplication(url) {
   await loadApplications();
+  const record = currentQueueRows().find(row => normalizeQueueUrl(row.url) === normalizeQueueUrl(url));
+  if (!record) return;
+  if (applicationQueueGroup(record.status) === "next") {
+    await openApplyAssistant(record);
+    return;
+  }
+  renderSelectedJob(record);
+  renderApplicationQueue(currentQueueRows());
+  await refreshAutofillStatus();
+}
+
+async function autoSelectNextQueuedJob(previousUrl) {
+  await loadApplications();
+  const previous = normalizeQueueUrl(previousUrl);
+  const next = currentQueueRows().find(row => {
+    return applicationQueueGroup(row.status) === "next" && normalizeQueueUrl(row.url) !== previous;
+  });
+  if (next) {
+    await openApplyAssistant(next);
+    return;
+  }
+  renderQueueComplete();
+  renderApplicationQueue(currentQueueRows());
 }
 
 async function markSelectedApplicationStatus(status, options = {}) {
@@ -725,6 +902,10 @@ async function resumeAutofill() {
 
 async function startAutofillRequest(resume) {
   if (!selectedJob) return;
+  if (!supportsIndeedAutofill(selectedJob)) {
+    if (autofillSummary) autofillSummary.textContent = "Autofill is available for Indeed jobs only. Use the Apply link for this job.";
+    return;
+  }
   const response = await fetch(resume ? "/api/applications/autofill/resume" : "/api/applications/autofill", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -760,6 +941,10 @@ async function openIndeedLogin() {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const personalKeywordsInput = form.querySelector('[name="personal_keywords"]');
+  if (personalKeywordsInput) {
+    localStorage.setItem(personalKeywordsKey, personalKeywordsInput.value || "");
+  }
   button.disabled = true;
   const body = new URLSearchParams(new FormData(form));
   const response = await fetch("/api/run", {
@@ -828,6 +1013,10 @@ document.addEventListener("click", async (event) => {
       const savedDelete = event.target.closest("[data-saved-delete]");
       if (savedDelete) {
         await deleteSavedAnswer(savedDelete.dataset.savedDelete);
+      }
+      const queueSelect = event.target.closest("[data-queue-select]");
+      if (queueSelect) {
+        await selectQueuedApplication(queueSelect.dataset.queueSelect);
       }
     });
 
@@ -908,6 +1097,10 @@ window.addEventListener("message", event => {
   if (event.data.type === "jobfind:application-status-request") {
     broadcastApplicationStatuses();
   }
+  if (event.data.type === "jobfind:results-jobs") {
+    resultJobs = Array.isArray(event.data.jobs) ? event.data.jobs.map(normalizeResultJob).filter(job => job.url) : [];
+    renderApplicationQueue(currentQueueRows());
+  }
 });
 
 if (frame) frame.addEventListener("load", broadcastApplicationStatuses);
@@ -939,6 +1132,10 @@ async function loadConfig() {
     }
     const minScore = form && form.querySelector('[name="min_score"]');
     if (minScore && !minScore.value) minScore.value = (cfg.default_min_score ?? "");
+    const personalKeywords = form && form.querySelector('[name="personal_keywords"]');
+    if (personalKeywords && !personalKeywords.value) {
+      personalKeywords.value = localStorage.getItem(personalKeywordsKey) || "";
+    }
   } catch (e) {
     console.warn("Could not load /api/config defaults:", e);
   }

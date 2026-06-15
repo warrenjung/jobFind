@@ -111,10 +111,16 @@ class TestBuildHtml:
         assert "Postings from the last 14 days" in out
         assert 'id="job-search"' in out
         assert 'id="application-status"' in out
+        assert 'id="show-all-jobs"' in out
+        assert "dataset.localStatusLoaded" in out
+        assert "Show all jobs" in out
         assert 'data-url="https://x/viewjob?jk=1"' in out
         assert 'data-application-status="need-to-apply"' in out
         assert "Need to apply" in out
         assert "jobfind:apply-assistant" in out
+        assert 'data-title="Cashier"' in out
+        assert 'data-company="Target"' in out
+        assert 'data-source-label="Indeed"' in out
         assert 'data-pay="20"' in out
         assert "data-score" in out
 

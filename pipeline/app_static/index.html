@@ -37,6 +37,9 @@
       <label>Min Score
         <input name="min_score" value="" inputmode="numeric">
       </label>
+      <label>Preferred job keywords
+        <input name="personal_keywords" value="" placeholder="barista, tutoring, summer camp">
+      </label>
       <button id="run-button" type="submit">Search</button>
     </form>
     <section class="status">
@@ -52,9 +55,20 @@
     </div>
     <section class="workspace">
       <iframe id="results-frame" src="/jobs_clean.html"></iframe>
+      <aside class="queue-panel" aria-label="Application Queue">
+        <div class="section-heading">
+          <div>
+            <h2>Application Queue</h2>
+            <p id="queue-summary">Loading current results...</p>
+          </div>
+        </div>
+        <ul class="application-list" id="application-list">
+          <li>No applications tracked yet.</li>
+        </ul>
+      </aside>
       <aside class="apply-panel" aria-label="Apply Assistant">
         <h2>Apply Assistant</h2>
-        <p>Use this to open Indeed jobs, copy your saved info, and track progress. You still review and submit every application yourself.</p>
+        <p>Use this to select Indeed jobs, copy saved info, and track progress. Use each job's Apply button to open the application page.</p>
         <div class="selected-job" id="selected-job">
           <strong>No job selected</strong>
           <p>Click Apply Assistant on an Indeed job card.</p>
@@ -138,12 +152,6 @@
           </form>
           <ul class="profile-list" id="profile-list">
             <li class="application-list">Loading local profile...</li>
-          </ul>
-        </section>
-        <section>
-          <h2>Recent</h2>
-          <ul class="application-list" id="application-list">
-            <li>No applications tracked yet.</li>
           </ul>
         </section>
       </aside>

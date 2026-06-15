@@ -32,6 +32,8 @@ DEFAULT_INDEED_FILE = str(DATA_DIR / "indeed_jobs_cupertino.csv")
 DEFAULT_CAREERONESTOP_FILE = ""
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
+PERSONAL_KEYWORD_POINTS = 8
+PERSONAL_KEYWORD_CAP = 25
 from utils import NOT_SPECIFIED, parse_float
 
 
@@ -319,12 +321,16 @@ def parse_hourly_pay(pay: Any) -> Optional[float]:
     return sum(numbers[:2]) / 2
 
 
-def rate_job(job: dict[str, Any]) -> dict[str, Any]:
+def rate_job(
+    job: dict[str, Any],
+    personal_keywords: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """Score one normalized job for high-school student suitability."""
     score = 20
     reasons = ["+20 base score"]
 
     keyword_score, keyword_reasons = score_keywords(job, GOOD_KEYWORDS, cap=35)
+    personal_score, personal_reasons = score_personal_keywords(job, personal_keywords or [])
     penalty_score, penalty_reasons = score_keywords(job, BAD_KEYWORDS, cap=None)
     metadata_score, metadata_reasons = score_teen_fit_metadata(job)
     schedule_score, schedule_reasons = score_schedule(job)
@@ -334,6 +340,7 @@ def rate_job(job: dict[str, Any]) -> dict[str, Any]:
     source_score, source_reasons = score_source_fit(job)
 
     score += keyword_score
+    score += personal_score
     score += penalty_score
     score += metadata_score
     score += schedule_score
@@ -343,6 +350,7 @@ def rate_job(job: dict[str, Any]) -> dict[str, Any]:
     score += source_score
 
     reasons.extend(keyword_reasons)
+    reasons.extend(personal_reasons)
     reasons.extend(penalty_reasons)
     reasons.extend(metadata_reasons)
     reasons.extend(schedule_reasons)
@@ -377,6 +385,49 @@ def score_keywords(
     if cap is not None and total > cap:
         reasons.append(f"score capped at +{cap} for positive keyword matches")
         total = cap
+
+    return total, reasons
+
+
+def parse_personal_keywords(value: Any) -> list[str]:
+    """Parse comma-separated personal preference phrases."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        raw_parts = [str(item) for item in value]
+    else:
+        raw_parts = str(value).split(",")
+
+    keywords = []
+    seen = set()
+    for part in raw_parts:
+        keyword = re.sub(r"\s+", " ", part.strip().lower())
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        keywords.append(keyword)
+    return keywords
+
+
+def score_personal_keywords(
+    job: dict[str, Any],
+    personal_keywords: list[str],
+) -> tuple[int, list[str]]:
+    """Score user-selected preferred job keywords."""
+    if not personal_keywords:
+        return 0, []
+
+    text = f"{searchable_text(job)} {metadata_text(job)}"
+    total = 0
+    reasons = []
+    for keyword in personal_keywords:
+        if contains_phrase(text, keyword):
+            total += PERSONAL_KEYWORD_POINTS
+            reasons.append(f"+{PERSONAL_KEYWORD_POINTS} personal keyword match: {keyword}")
+
+    if total > PERSONAL_KEYWORD_CAP:
+        reasons.append(f"score capped at +{PERSONAL_KEYWORD_CAP} for personal keyword matches")
+        total = PERSONAL_KEYWORD_CAP
 
     return total, reasons
 
@@ -657,9 +708,11 @@ def resolve_home_location(home_location: str) -> str:
 def rank_jobs(
     jobs: list[dict[str, Any]],
     home_location: str,
+    personal_keywords: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Rate and sort jobs from highest to lowest student fit."""
     home_coordinates = coordinates_for_location(home_location)
+    personal_keywords = personal_keywords or []
     ranked_jobs = []
     for job in jobs:
         source_distance = parse_float(job.get("distance_miles"))
@@ -667,7 +720,7 @@ def rank_jobs(
             job["distance_miles"] = source_distance
         else:
             job["distance_miles"] = estimate_distance_miles(job, home_coordinates)
-        rating = rate_job(job)
+        rating = rate_job(job, personal_keywords)
         ranked_jobs.append({**job, "home_location": home_location, **rating})
 
     ranked_jobs.sort(
@@ -793,16 +846,22 @@ def main() -> None:
         ),
     )
     parser.add_argument("--preview-count", type=int, default=10)
+    parser.add_argument(
+        "--personal-keywords",
+        default="",
+        help="Comma-separated preferred job terms to boost in scoring.",
+    )
     args = parser.parse_args()
 
     home_location = resolve_home_location(args.home_location)
+    personal_keywords = parse_personal_keywords(args.personal_keywords)
     jobs = (
         load_usajobs(args.usajobs_file)
         + load_indeed_jobs(args.indeed_file)
         + load_careeronestop_jobs(args.careeronestop_file)
     )
     jobs = dedupe_jobs(jobs)
-    ranked_jobs = rank_jobs(jobs, home_location)
+    ranked_jobs = rank_jobs(jobs, home_location, personal_keywords)
     save_ranked_jobs(ranked_jobs, args.output)
     preview_ranked_jobs(ranked_jobs, args.preview_count)
     print(f"\nSaved ranked jobs to {args.output}")

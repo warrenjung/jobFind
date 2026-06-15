@@ -137,13 +137,17 @@ make help             Show this message
 
 Override any default:
 ```bash
-make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30
+make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30 KEYWORDS="barista, tutoring"
 ```
 
 `FROMAGE` controls the Indeed freshness window in days (default 14; use 0 for no
 limit). The generated HTML page lets you filter by title/employer/city, minimum
 pay, job type, source, and distance, then sort by best fit, highest pay, or
 closest — all client-side, no rerun needed.
+
+`KEYWORDS` is optional. Use it to personalize ranking toward the kinds of jobs
+you want, such as `barista, tutoring, summer camp`. Matching jobs get a moderate
+score boost without replacing the built-in student-friendly scoring rules.
 
 For targeted Indeed experiments, pass custom queries directly:
 ```bash
@@ -168,7 +172,8 @@ make app
 
 Then open [http://localhost:8000](http://localhost:8000). The page lets you
 enter a location, choose a radius, pick Fast or Full mode, set a minimum score,
-and refresh the embedded results page from the browser.
+add preferred job keywords for personalized scoring, and refresh the embedded
+results page from the browser.
 
 The local app also includes an Apply Assistant for Indeed jobs. Click
 `Apply Assistant` on a job card to load it into the side panel, copy saved

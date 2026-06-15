@@ -254,6 +254,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--personal-keywords",
+        default="",
+        help="Comma-separated preferred job terms to boost during ranking.",
+    )
+    parser.add_argument(
         "--skip-clean-table",
         action="store_true",
         help="Skip generating the clean readable output.",
@@ -415,6 +420,8 @@ def main() -> None:
         "--preview-count",
         str(args.preview_count),
     ]
+    if args.personal_keywords.strip():
+        rank_command.extend(["--personal-keywords", args.personal_keywords])
     if careeronestop_json is not None:
         rank_command.extend(["--careeronestop-file", str(careeronestop_json)])
 

@@ -40,6 +40,17 @@ class TestValidateForm:
         _, error = lss.validate_form({"min_score": ["abc"]})
         assert error is not None
 
+    def test_accepts_personal_keywords(self):
+        opts, error = lss.validate_form({"personal_keywords": [" barista, tutoring "]})
+
+        assert error is None
+        assert opts["personal_keywords"] == "barista, tutoring"
+
+    def test_rejects_too_long_personal_keywords(self):
+        _, error = lss.validate_form({"personal_keywords": ["x" * (lss.MAX_PERSONAL_KEYWORDS_LENGTH + 1)]})
+
+        assert error == "Preferred job keywords are too long."
+
 
 class TestBuildPipelineCommand:
     def _opts(self, mode="fast"):
@@ -67,6 +78,17 @@ class TestBuildPipelineCommand:
         cmd = lss.build_pipeline_command(self._opts("fast"))
         assert "--location" in cmd and "Cupertino, CA" in cmd
         assert "--clean-min-score" in cmd and "50" in cmd
+
+    def test_omits_blank_personal_keywords(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "personal_keywords": ""})
+
+        assert "--personal-keywords" not in cmd
+
+    def test_passes_personal_keywords_when_present(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "personal_keywords": "barista, tutoring"})
+
+        i = cmd.index("--personal-keywords")
+        assert cmd[i + 1] == "barista, tutoring"
 
 
 class TestApplicationTracking:
@@ -116,6 +138,53 @@ class TestApplicationTracking:
         assert reopened["status"] == "Applied"
         saved = json.loads(status_file.read_text())
         assert saved["applications"][0]["status"] == "Applied"
+
+    def test_application_queue_group_maps_statuses(self):
+        assert lss.application_queue_group("") == "next"
+        assert lss.application_queue_group("Opened") == "progress"
+        assert lss.application_queue_group("Autofilled") == "progress"
+        assert lss.application_queue_group("Needs follow-up") == "follow"
+        assert lss.application_queue_group("Applied") == "done"
+        assert lss.application_queue_group("Skipped") == "skipped"
+
+    def test_group_application_records_sorts_into_queue_buckets(self):
+        rows = [
+            {"title": "New"},
+            {"title": "Opened", "status": "Opened"},
+            {"title": "Autofilled", "status": "Autofilled"},
+            {"title": "Follow", "status": "Needs follow-up"},
+            {"title": "Done", "status": "Applied"},
+            {"title": "Skipped", "status": "Skipped"},
+        ]
+
+        grouped = lss.group_application_records(rows)
+
+        assert [row["title"] for row in grouped["next"]] == ["New"]
+        assert [row["title"] for row in grouped["progress"]] == ["Opened", "Autofilled"]
+        assert [row["title"] for row in grouped["follow"]] == ["Follow"]
+        assert [row["title"] for row in grouped["done"]] == ["Done"]
+        assert [row["title"] for row in grouped["skipped"]] == ["Skipped"]
+
+    def test_static_dashboard_has_dedicated_queue_column(self):
+        html = (lss.STATIC_DIR / "index.html").read_text()
+
+        assert 'class="queue-panel"' in html
+        assert html.index('class="queue-panel"') < html.index('class="apply-panel"')
+
+    def test_static_dashboard_merges_result_jobs_and_auto_advances(self):
+        script = (lss.STATIC_DIR / "app.js").read_text()
+
+        assert "mergeQueueRows" in script
+        assert "jobfind:results-jobs" in script
+        assert "autoSelectNextQueuedJob" in script
+        assert "supportsIndeedAutofill" in script
+
+    def test_static_dashboard_has_personal_keywords_field(self):
+        html = (lss.STATIC_DIR / "index.html").read_text()
+        script = (lss.STATIC_DIR / "app.js").read_text()
+
+        assert 'name="personal_keywords"' in html
+        assert "jobfind.personalKeywords" in script
 
 
 class TestSavedAnswers:

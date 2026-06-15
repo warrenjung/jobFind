@@ -57,6 +57,58 @@ class TestScoreSourceFit:
         assert score == 2
 
 
+class TestPersonalKeywordScoring:
+    JOB = {
+        "title": "Summer Camp Tutor",
+        "company": "Example Learning",
+        "location": "Cupertino, CA",
+        "job_type": "Part-time",
+        "schedule": "Flexible",
+        "description": "Help students with reading activities.",
+        "teen_fit_reason": "Part-time friendly",
+    }
+
+    def test_parse_personal_keywords_trims_dedupes_and_lowercases(self):
+        assert rj.parse_personal_keywords(" Barista, tutoring, barista ") == ["barista", "tutoring"]
+
+    def test_blank_personal_keywords_no_score(self):
+        score, reasons = rj.score_personal_keywords(self.JOB, [])
+
+        assert score == 0
+        assert reasons == []
+
+    def test_personal_keyword_match_scores_phrase_case_insensitive(self):
+        score, reasons = rj.score_personal_keywords(self.JOB, ["summer camp"])
+
+        assert score == rj.PERSONAL_KEYWORD_POINTS
+        assert reasons == ["+8 personal keyword match: summer camp"]
+
+    def test_personal_keyword_score_is_capped(self):
+        score, reasons = rj.score_personal_keywords(
+            self.JOB,
+            ["summer", "camp", "tutor", "students"],
+        )
+
+        assert score == rj.PERSONAL_KEYWORD_CAP
+        assert f"score capped at +{rj.PERSONAL_KEYWORD_CAP} for personal keyword matches" in reasons
+
+    def test_rate_job_includes_personal_keyword_reason(self):
+        rated = rj.rate_job(self.JOB, ["tutor"])
+
+        assert any("personal keyword match: tutor" in reason for reason in rated["rating_reasons"])
+
+    def test_rank_jobs_accepts_personal_keywords(self):
+        jobs = [
+            {**self.JOB, "title": "Tutor", "url": "https://example.com/tutor"},
+            {**self.JOB, "title": "Cashier", "description": "Run register.", "url": "https://example.com/cashier"},
+        ]
+
+        ranked = rj.rank_jobs(jobs, "Cupertino, CA", ["tutor"])
+
+        assert ranked[0]["title"] == "Tutor"
+        assert any("personal keyword match: tutor" in reason for reason in ranked[0]["rating_reasons"])
+
+
 class TestDedupeJobs:
     def test_dedupes_by_url(self):
         jobs = [

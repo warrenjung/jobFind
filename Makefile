@@ -4,6 +4,7 @@ PAGES    ?= 3
 RESULTS  ?= 25
 MIN_SCORE ?= 50
 FROMAGE  ?= 14
+KEYWORDS ?=
 CAREER_RESULTS ?= 25
 CAREER_DAYS ?= 30
 PORT     ?= 8000
@@ -25,6 +26,7 @@ run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, 
 		--indeed-radius $(RADIUS) \
 		--indeed-pages $(PAGES) \
 		--indeed-fromage $(FROMAGE) \
+		--personal-keywords "$(KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-wide
@@ -39,6 +41,7 @@ run-fast: ## Faster smoke run with fewer Indeed queries/pages
 		--indeed-pages 1 \
 		--indeed-fromage $(FROMAGE) \
 		--indeed-queries cashier "retail associate" barista \
+		--personal-keywords "$(KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-skip-indeed
@@ -46,6 +49,7 @@ run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
 	$(PYTHON) pipeline/run_job_pipeline.py \
 		--location "$(LOCATION)" \
 		--skip-indeed \
+		--personal-keywords "$(KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-with-usajobs
@@ -57,6 +61,7 @@ run-with-usajobs: ## Run the pipeline and include USAJOBS federal results
 		--indeed-fromage $(FROMAGE) \
 		--include-usajobs \
 		--num-usajobs-results $(RESULTS) \
+		--personal-keywords "$(KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-with-careeronestop
@@ -69,6 +74,7 @@ run-with-careeronestop: ## Include CareerOneStop API results once NLx access is 
 		--include-careeronestop \
 		--careeronestop-results $(CAREER_RESULTS) \
 		--careeronestop-days $(CAREER_DAYS) \
+		--personal-keywords "$(KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

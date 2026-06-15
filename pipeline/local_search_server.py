@@ -46,6 +46,7 @@ DEFAULT_LOCATION = "Cupertino, CA"
 DEFAULT_RADIUS = "10"
 DEFAULT_MODE = "fast"
 DEFAULT_MIN_SCORE = "50"
+MAX_PERSONAL_KEYWORDS_LENGTH = 240
 APP_BASE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 
 RADIUS_CHOICES = {"5", "10", "15", "25", "35", "50"}
@@ -782,6 +783,29 @@ def load_application_records() -> dict[str, dict[str, Any]]:
     return records
 
 
+def application_queue_group(status: Any) -> str:
+    """Return the dashboard queue group for an application status."""
+    value = str(status or "").strip()
+    if value == "Applied":
+        return "done"
+    if value == "Skipped":
+        return "skipped"
+    if value == "Needs follow-up":
+        return "follow"
+    if value in {"Opened", "Autofilled"}:
+        return "progress"
+    return "next"
+
+
+def group_application_records(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group application rows into the dashboard queue buckets."""
+    grouped = {key: [] for key in ("next", "progress", "follow", "done", "skipped")}
+    for row in rows:
+        if isinstance(row, dict):
+            grouped[application_queue_group(row.get("status"))].append(row)
+    return grouped
+
+
 def save_application_records(records: dict[str, dict[str, Any]]) -> None:
     """Persist application records in a stable, readable shape."""
     rows = sorted(
@@ -876,9 +900,12 @@ def validate_form(data: dict[str, list[str]]) -> tuple[dict[str, str], Optional[
     radius = clean_form_value(data, "radius", DEFAULT_RADIUS)
     mode = clean_form_value(data, "mode", DEFAULT_MODE)
     min_score = clean_form_value(data, "min_score", DEFAULT_MIN_SCORE)
+    personal_keywords = clean_form_value(data, "personal_keywords", "")
 
     if len(location) > 120:
         return {}, "Location is too long."
+    if len(personal_keywords) > MAX_PERSONAL_KEYWORDS_LENGTH:
+        return {}, "Preferred job keywords are too long."
     if radius not in RADIUS_CHOICES:
         return {}, "Radius must be one of: 5, 10, 15, 25, 35, 50."
     if mode not in MODE_CHOICES:
@@ -895,6 +922,7 @@ def validate_form(data: dict[str, list[str]]) -> tuple[dict[str, str], Optional[
         "radius": radius,
         "mode": mode,
         "min_score": f"{min_score_number:g}",
+        "personal_keywords": personal_keywords,
     }, None
 
 
@@ -912,6 +940,8 @@ def build_pipeline_command(options: dict[str, str]) -> list[str]:
         "--preview-count",
         "10",
     ]
+    if options.get("personal_keywords"):
+        command.extend(["--personal-keywords", options["personal_keywords"]])
 
     # USAJOBS is intentionally not requested — it returns federal career roles,
     # not local entry-level jobs. Add "--include-usajobs" here if ever wanted.

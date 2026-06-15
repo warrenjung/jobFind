@@ -249,6 +249,25 @@ PAGE_CSS = """
       font-weight: 600;
     }
 
+    .show-all-jobs {
+      width: fit-content;
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #f4f8f7;
+      color: var(--accent-strong);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .show-all-jobs:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+
     .empty {
       background: var(--card);
       border: 1px dashed var(--line);
@@ -386,6 +405,7 @@ PAGE_SCRIPT = """
       const noMatch = document.getElementById('no-match');
       const countEl = document.getElementById('job-count');
       const applicationCounts = document.getElementById('application-counts');
+      const showAllJobs = document.getElementById('show-all-jobs');
       if (!section) return;
       const cards = Array.from(section.querySelectorAll('.job-card'));
       const assistantButtons = Array.from(document.querySelectorAll('.assistant-button'));
@@ -461,6 +481,23 @@ PAGE_SCRIPT = """
         ].join(' · ');
       }
 
+      function collectResultJobs() {
+        return cards.map(card => ({
+          url: card.dataset.url || '',
+          title: card.dataset.title || '',
+          company: card.dataset.company || '',
+          source: card.dataset.sourceLabel || card.dataset.source || '',
+          score: card.dataset.score || '',
+          status: statusValues[card.dataset.applicationStatus] || ''
+        })).filter(job => job.url);
+      }
+
+      function publishResultJobs() {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'jobfind:results-jobs', jobs: collectResultJobs() }, '*');
+        }
+      }
+
       function applyApplicationStatuses(rows) {
         const records = new Map();
         (Array.isArray(rows) ? rows : []).forEach(row => {
@@ -471,8 +508,13 @@ PAGE_SCRIPT = """
           const url = normalizeUrl(card.dataset.url);
           renderStatusBadge(card, records.get(url) || 'need-to-apply');
         });
+        if (applicationStatus && !applicationStatus.dataset.localStatusLoaded) {
+          applicationStatus.value = 'need-to-apply';
+          applicationStatus.dataset.localStatusLoaded = '1';
+        }
         updateApplicationCounts();
         apply();
+        publishResultJobs();
       }
 
       function requestApplicationStatuses() {
@@ -531,6 +573,12 @@ PAGE_SCRIPT = """
       if (applicationStatus) applicationStatus.addEventListener('change', apply);
       if (maxDistance) maxDistance.addEventListener('change', apply);
       if (sortSelect) sortSelect.addEventListener('change', apply);
+      if (showAllJobs) {
+        showAllJobs.addEventListener('click', () => {
+          if (applicationStatus) applicationStatus.value = '';
+          apply();
+        });
+      }
       assistantButtons.forEach(button => {
         button.addEventListener('click', () => {
           const job = {
@@ -555,6 +603,7 @@ PAGE_SCRIPT = """
       cards.forEach(card => renderStatusBadge(card, 'need-to-apply'));
       requestApplicationStatuses();
       apply();
+      publishResultJobs();
     })();
   </script>"""
 
@@ -616,6 +665,7 @@ def build_controls_html(source_options_html: str) -> str:
       </label>
       <span class="count" id="job-count"></span>
       <span class="application-counts" id="application-counts"></span>
+      <button class="show-all-jobs" id="show-all-jobs" type="button">Show all jobs</button>
     </section>"""
 
 
