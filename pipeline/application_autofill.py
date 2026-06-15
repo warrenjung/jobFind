@@ -14,6 +14,26 @@ from pathlib import Path
 from typing import Any, Optional
 
 import autofill_browser
+from autofill_browser import (
+    attach_browser_report,
+    cdp_endpoint,
+    chrome_debug_ready,
+    chrome_process_uses_profile,
+    close_report_browser,
+    connect_user_chrome,
+    find_chrome_executable,
+    free_debug_port,
+    launch_user_chrome,
+    load_chrome_session,
+    open_browser_context,
+    open_indeed_login,
+    persistent_profile_path,
+    profile_lock_files_exist,
+    recover_chrome_session,
+    save_chrome_session,
+    session_metadata_path,
+    start_playwright,
+)
 from autofill_review import (
     COMMON_ANSWER_PROMPTS,
     COMMON_ANSWER_STORAGE_PROMPTS,
@@ -1074,118 +1094,6 @@ def find_application_tab(context: Any, job_url: str) -> Optional[Any]:
             best_page = page
             best_score = score
     return best_page
-
-
-def persistent_profile_path(data_dir: Path, site: str = "indeed") -> Path:
-    """Return the local-only browser profile directory for a job site."""
-    return autofill_browser.persistent_profile_path(data_dir, site)
-
-
-def find_chrome_executable() -> Optional[str]:
-    """Locate a real Google Chrome / Chromium binary, or None if not installed."""
-    return autofill_browser.find_chrome_executable()
-
-
-def free_debug_port(preferred: int = 9222) -> int:
-    """Return an open localhost port, preferring 9222."""
-    return autofill_browser.free_debug_port(preferred)
-
-
-def cdp_endpoint(debug_port: int) -> str:
-    """CDP HTTP endpoint for a given debug port."""
-    return autofill_browser.cdp_endpoint(debug_port)
-
-
-def chrome_debug_ready(debug_port: int) -> bool:
-    """Whether Chrome's remote-debugging endpoint is responding."""
-    return autofill_browser.chrome_debug_ready(debug_port)
-
-
-def session_metadata_path(user_data_dir: Path) -> Path:
-    """Return the ignored file that stores the managed Chrome session metadata."""
-    return autofill_browser.session_metadata_path(user_data_dir)
-
-
-def save_chrome_session(user_data_dir: Path, debug_port: int) -> dict[str, Any]:
-    """Persist the managed Chrome debug port for reconnecting after server restart."""
-    return autofill_browser.save_chrome_session(user_data_dir, debug_port)
-
-
-def load_chrome_session(user_data_dir: Path) -> Optional[dict[str, Any]]:
-    """Load persisted managed Chrome session metadata, if valid enough to use."""
-    return autofill_browser.load_chrome_session(user_data_dir)
-
-
-def chrome_process_uses_profile(debug_port: int, user_data_dir: Path) -> bool:
-    """Whether a local Chrome process for debug_port uses this profile directory."""
-    return autofill_browser.chrome_process_uses_profile(debug_port, user_data_dir)
-
-
-def profile_lock_files_exist(user_data_dir: Path) -> bool:
-    """Whether Chrome profile lock files are present for the managed profile."""
-    return autofill_browser.profile_lock_files_exist(user_data_dir)
-
-
-def recover_chrome_session(user_data_dir: Path, preferred_port: int = 9222) -> Optional[dict[str, Any]]:
-    """Recover a live managed Chrome session when session.json is missing/stale."""
-    return autofill_browser.recover_chrome_session(user_data_dir, preferred_port)
-
-
-def launch_user_chrome(
-    user_data_dir: Path,
-    debug_port: int,
-    start_url: Optional[str] = None,
-    chrome_path: Optional[str] = None,
-    ready_timeout_s: float = 20.0,
-) -> Any:
-    """Launch the user's real Chrome as a local process with remote debugging."""
-    return autofill_browser.launch_user_chrome(
-        user_data_dir,
-        debug_port,
-        start_url=start_url,
-        chrome_path=chrome_path,
-        ready_timeout_s=ready_timeout_s,
-    )
-
-
-def connect_user_chrome(pw: Any, debug_port: int) -> tuple[Any, Any]:
-    """Attach Playwright to a running real Chrome over CDP."""
-    return autofill_browser.connect_user_chrome(pw, debug_port)
-
-
-def open_browser_context(pw: Any, headless: bool, user_data_dir: Optional[Path] = None) -> tuple[Any, Optional[Any]]:
-    """Open a persistent or temporary context."""
-    return autofill_browser.open_browser_context(pw, headless, user_data_dir)
-
-
-def attach_browser_report(
-    report: dict[str, Any],
-    pw: Any,
-    context: Any,
-    browser: Optional[Any],
-    page: Any,
-    user_data_dir: Optional[Path] = None,
-) -> None:
-    """Attach live Playwright handles to a report for review/cleanup."""
-    autofill_browser.attach_browser_report(report, pw, context, browser, page, user_data_dir)
-
-
-def close_report_browser(report: dict[str, Any]) -> None:
-    """Close Playwright handles attached to a report, ignoring stale handles."""
-    autofill_browser.close_report_browser(report)
-
-
-def start_playwright() -> Any:
-    """Import and start Playwright with a helpful install message."""
-    return autofill_browser.start_playwright()
-
-
-def open_indeed_login(
-    user_data_dir: Path,
-    login_url: str = INDEED_LOGIN_URL,
-) -> dict[str, Any]:
-    """Launch the user's real Chrome at the Indeed login page for manual login."""
-    return autofill_browser.open_indeed_login(user_data_dir, login_url=login_url)
 
 
 def overlay_review_items(report: dict[str, Any], review_items: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
