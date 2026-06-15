@@ -1056,9 +1056,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.handle_run_request()
             return
         if path == "/api/applicant-profile":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             profile, warnings = save_applicant_profile_updates(payload)
             self.send_json({"profile": profile, "warnings": warnings})
@@ -1067,9 +1066,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.handle_resume_upload()
             return
         if path == "/api/common-answers":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             profile, answers, update_error = save_common_answers_updates(payload)
             if update_error:
@@ -1078,25 +1076,22 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"profile": profile, "answers": answers})
             return
         if path == "/api/common-answers/improve":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             result, status = improve_common_answer(payload)
             self.send_json(result, status=status)
             return
         if path == "/api/application-questions/suggest":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             result, status = suggest_application_answer(payload)
             self.send_json(result, status=status)
             return
         if path == "/api/saved-answers":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             saved, save_error = save_overlay_answer(payload)
             if save_error:
@@ -1105,9 +1100,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"saved_answer": saved})
             return
         if path == "/api/saved-answers/update":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             saved, update_error = update_saved_answer(payload)
             if update_error:
@@ -1116,9 +1110,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"saved_answer": saved})
             return
         if path == "/api/saved-answers/delete":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             deleted, delete_error = delete_saved_answer(payload)
             if delete_error:
@@ -1127,9 +1120,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"deleted": deleted})
             return
         if path == "/api/applications/open":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             application, update_error = upsert_application(payload, "Opened")
             if update_error:
@@ -1138,9 +1130,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"application": application})
             return
         if path == "/api/applications/status":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             status_value = clean_payload_text(payload.get("status"), 80)
             application, update_error = upsert_application(
@@ -1154,23 +1145,20 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json({"application": application})
             return
         if path == "/api/applications/autofill":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             self.handle_autofill_request(payload, resume=False)
             return
         if path == "/api/applications/autofill/resume":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             self.handle_autofill_request(payload, resume=True)
             return
         if path == "/api/applications/autofill/overlay-resume":
-            payload, error = self.read_json_body()
-            if error:
-                self.send_json({"error": error}, status=400)
+            payload = self.json_body()
+            if payload is None:
                 return
             self.handle_autofill_request(payload, resume=True)
             return
@@ -1248,6 +1236,14 @@ class SearchHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             return {}, "Request body must be a JSON object."
         return payload, None
+
+    def json_body(self) -> Optional[dict[str, Any]]:
+        """Return the parsed JSON body, or None after sending a 400 on error."""
+        payload, error = self.read_json_body()
+        if error:
+            self.send_json({"error": error}, status=400)
+            return None
+        return payload
 
     def read_binary_body(self, max_bytes: int) -> tuple[bytes, Optional[str]]:
         """Read a raw binary request body (e.g. an uploaded file)."""

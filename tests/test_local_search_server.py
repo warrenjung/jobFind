@@ -299,8 +299,8 @@ class TestSavedAnswers:
             def __init__(self):
                 self.sent = None
 
-            def read_json_body(self):
-                return {"key": "why this job", "answer": "New answer", "autofill_enabled": False}, None
+            def json_body(self):
+                return {"key": "why this job", "answer": "New answer", "autofill_enabled": False}
 
             def send_json(self, payload, status=200):
                 self.sent = (payload, status)
@@ -329,8 +329,8 @@ class TestSavedAnswers:
             def __init__(self):
                 self.sent = None
 
-            def read_json_body(self):
-                return {"key": "why this job"}, None
+            def json_body(self):
+                return {"key": "why this job"}
 
             def send_json(self, payload, status=200):
                 self.sent = (payload, status)
@@ -352,8 +352,8 @@ class TestSavedAnswers:
             def __init__(self):
                 self.sent = None
 
-            def read_json_body(self):
-                return {"answer": "No key"}, None
+            def json_body(self):
+                return {"answer": "No key"}
 
             def send_json(self, payload, status=200):
                 self.sent = (payload, status)
@@ -933,8 +933,8 @@ class TestAutofillLoginFlow:
             def __init__(self):
                 self.called = None
 
-            def read_json_body(self):
-                return {"url": "https://www.indeed.com/viewjob?jk=abc", "title": "Cashier"}, None
+            def json_body(self):
+                return {"url": "https://www.indeed.com/viewjob?jk=abc", "title": "Cashier"}
 
             def handle_autofill_request(self, payload, resume=False):
                 self.called = (payload, resume)
