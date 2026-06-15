@@ -6,6 +6,7 @@ module can depend on it without creating an import cycle.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -13,6 +14,27 @@ from pathlib import Path
 from typing import Any, Optional
 
 NOT_SPECIFIED = "Not specified"
+
+
+def format_row(values: list, widths: list) -> str:
+    """Format one console preview row with left-padded columns."""
+    return " | ".join(str(value).ljust(width) for value, width in zip(values, widths))
+
+
+def read_credentials_file(filename: str) -> dict:
+    """Read a local credentials JSON file as a dict.
+
+    Returns an empty dict when the file does not exist (env vars are the primary
+    source); raises RuntimeError if the file exists but cannot be parsed.
+    """
+    if not os.path.exists(filename):
+        return {}
+    try:
+        with open(filename, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Could not read {filename}: {exc}") from exc
+    return data if isinstance(data, dict) else {}
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:

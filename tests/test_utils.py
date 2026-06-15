@@ -132,3 +132,32 @@ class TestSafeResumeFilename:
 
     def test_strips_null_bytes(self):
         assert utils.safe_resume_filename("re\x00sume.pdf", self.EXTS) == "resume.pdf"
+
+
+class TestFormatRow:
+    def test_left_pads_columns(self):
+        assert utils.format_row(["a", "bb"], [3, 4]) == "a   | bb  "
+
+    def test_coerces_non_strings(self):
+        assert utils.format_row([1, 22], [2, 3]) == "1  | 22 "
+
+
+class TestReadCredentialsFile:
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert utils.read_credentials_file(str(tmp_path / "nope.json")) == {}
+
+    def test_reads_json_object(self, tmp_path):
+        path = tmp_path / "creds.json"
+        path.write_text('{"api_key": "k", "email": "e"}', encoding="utf-8")
+        assert utils.read_credentials_file(str(path)) == {"api_key": "k", "email": "e"}
+
+    def test_non_object_json_returns_empty(self, tmp_path):
+        path = tmp_path / "creds.json"
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+        assert utils.read_credentials_file(str(path)) == {}
+
+    def test_corrupt_json_raises_runtime_error(self, tmp_path):
+        path = tmp_path / "creds.json"
+        path.write_text("{not json", encoding="utf-8")
+        with pytest.raises(RuntimeError):
+            utils.read_credentials_file(str(path))

@@ -25,7 +25,7 @@ DEFAULT_NUM_RESULTS = 25
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_raw.json")
 DEFAULT_CREDENTIALS_FILE = str(_REPO_ROOT / "usajobs_credentials.json")
 TEMPORARY_APPOINTMENT_CODE = "15317"
-from utils import NOT_SPECIFIED
+from utils import NOT_SPECIFIED, format_row, read_credentials_file
 
 
 def value_or_default(value: Any, default: str = NOT_SPECIFIED) -> Any:
@@ -44,15 +44,7 @@ def first_list_item(items: Any) -> dict[str, Any]:
 
 def load_local_credentials(filename: str = DEFAULT_CREDENTIALS_FILE) -> dict[str, str]:
     """Load local credentials when environment variables are not set."""
-    if not os.path.exists(filename):
-        return {}
-
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            credentials = json.load(file)
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(f"Could not read {filename}: {exc}") from exc
-
+    credentials = read_credentials_file(filename)
     return {
         "api_key": credentials.get("api_key", ""),
         "email": credentials.get("email", ""),
@@ -225,9 +217,6 @@ def truncate(text: str, max_length: int) -> str:
     return f"{text[: max_length - 3]}..."
 
 
-def format_row(values: list[str], widths: list[int]) -> str:
-    """Format one console preview row."""
-    return " | ".join(value.ljust(width) for value, width in zip(values, widths))
 
 
 def main() -> None:

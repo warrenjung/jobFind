@@ -27,7 +27,7 @@ DEFAULT_RADIUS = 10
 DEFAULT_RESULTS = 25
 DEFAULT_DAYS = 30
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_careeronestop.json")
-from utils import NOT_SPECIFIED, clean_text, parse_float, slugify_location
+from utils import NOT_SPECIFIED, clean_text, parse_float, read_credentials_file, slugify_location
 
 SEARCH_KEYWORDS = [
     "cashier",
@@ -46,15 +46,7 @@ SEARCH_KEYWORDS = [
 
 def load_local_credentials(filename: str = DEFAULT_CREDENTIALS_FILE) -> dict[str, str]:
     """Load local credentials when environment variables are not set."""
-    if not os.path.exists(filename):
-        return {}
-
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            credentials = json.load(file)
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(f"Could not read {filename}: {exc}") from exc
-
+    credentials = read_credentials_file(filename)
     return {
         "user_id": credentials.get("user_id", ""),
         "api_token": credentials.get("api_token", ""),

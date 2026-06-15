@@ -34,7 +34,7 @@ DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
 PERSONAL_KEYWORD_POINTS = 8
 PERSONAL_KEYWORD_CAP = 25
-from utils import NOT_SPECIFIED, parse_float
+from utils import NOT_SPECIFIED, format_row, parse_float
 
 
 GOOD_KEYWORDS = {
@@ -820,9 +820,6 @@ def format_deadline(deadline: Any) -> str:
     return text.split("T", 1)[0]
 
 
-def format_row(values: list[str], widths: list[int]) -> str:
-    """Format one console preview row."""
-    return " | ".join(value.ljust(width) for value, width in zip(values, widths))
 
 
 def main() -> None:
