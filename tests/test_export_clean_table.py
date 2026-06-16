@@ -20,6 +20,8 @@ class TestFormatters:
     def test_format_source(self):
         assert ect.format_source({"source": "indeed"}) == "Indeed"
         assert ect.format_source({"source": "usajobs"}) == "USAJOBS"
+        assert ect.format_source({"source": "ats_greenhouse"}) == "Greenhouse"
+        assert ect.format_source({"source": "ats_lever"}) == "Lever"
         assert ect.format_source({"source": "weird"}) == ect.NOT_SPECIFIED
 
     def test_format_location_prefers_city_state(self):
@@ -104,6 +106,8 @@ class TestBuildHtml:
                 "hourly_pay_estimate": 20,
                 "distance_miles": 1.0,
                 "url": "https://x/viewjob?jk=1",
+                "rating_label": "Great student fit",
+                "rating_reasons": ["+20 base score", "-8 full-time only"],
             }
         ]
         out = ect.build_html_cards(jobs, None, 50, location="Cupertino, CA", fromage=14)
@@ -123,6 +127,11 @@ class TestBuildHtml:
         assert 'data-source-label="Indeed"' in out
         assert 'data-pay="20"' in out
         assert "data-score" in out
+        assert "Why ranked here" in out
+        assert "+20 base score" in out
+        assert "-8 full-time only" in out
+        assert 'class="positive"' in out
+        assert 'class="negative"' in out
 
     def test_empty_shows_message_no_controls(self):
         out = ect.build_html_cards([], None, 50, location="Nowhere, ZZ")
@@ -131,12 +140,15 @@ class TestBuildHtml:
 
 
 class TestMatchedPersonalKeywords:
-    def _job(self, matched):
+    def _job(self, matched, avoid=None):
         return {
             "student_fit_score": 80,
             "title": "Barista",
             "company": "Cafe",
             "matched_personal_keywords": matched,
+            "matched_avoid_keywords": avoid or [],
+            "rating_label": "Great student fit",
+            "rating_reasons": ["+20 base score"],
         }
 
     def test_row_shown_when_keywords_matched(self):
@@ -147,3 +159,31 @@ class TestMatchedPersonalKeywords:
     def test_row_absent_when_no_match(self):
         out = ect.build_html_cards([self._job([])], None, 50)
         assert "Matches your keywords" not in out
+
+    def test_avoid_row_shown_when_keywords_matched(self):
+        out = ect.build_html_cards([self._job([], ["manager", "overnight"])], None, 50)
+        assert "Avoid keyword matches" in out
+        assert "manager, overnight" in out
+        assert "Matched avoid keywords" in out
+        assert "keyword-chip avoid" in out
+
+
+class TestRankingExplanation:
+    def test_reason_class(self):
+        assert ect.reason_class("+8 good") == "positive"
+        assert ect.reason_class("-10 penalty") == "negative"
+        assert ect.reason_class("score capped") == "neutral"
+
+    def test_ranking_explanation_escapes_reasons(self):
+        out = ect.ranking_explanation_html(
+            {
+                "student_fit_score": 70,
+                "rating_label": "Good",
+                "rating_reasons": ["+8 <match>", "-10 avoid"],
+            }
+        )
+
+        assert "Why ranked here" in out
+        assert "+8 &lt;match&gt;" in out
+        assert 'class="positive"' in out
+        assert 'class="negative"' in out

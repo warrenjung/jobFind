@@ -58,6 +58,7 @@ let suggestionTargetKey = "";
 let setupStatus = null;
 const setupPreferenceKey = "jobfind.setup.open";
 const personalKeywordsKey = "jobfind.personalKeywords";
+const avoidKeywordsKey = "jobfind.avoidKeywords";
 const setupOrder = ["profile", "resume", "indeed_login", "results"];
 const preservedApplicationStatuses = new Set(["Applied", "Skipped", "Needs follow-up"]);
 const queueGroups = [
@@ -945,6 +946,10 @@ form.addEventListener("submit", async (event) => {
   if (personalKeywordsInput) {
     localStorage.setItem(personalKeywordsKey, personalKeywordsInput.value || "");
   }
+  const avoidKeywordsInput = form.querySelector('[name="avoid_keywords"]');
+  if (avoidKeywordsInput) {
+    localStorage.setItem(avoidKeywordsKey, avoidKeywordsInput.value || "");
+  }
   button.disabled = true;
   const body = new URLSearchParams(new FormData(form));
   const response = await fetch("/api/run", {
@@ -1135,6 +1140,10 @@ async function loadConfig() {
     const personalKeywords = form && form.querySelector('[name="personal_keywords"]');
     if (personalKeywords && !personalKeywords.value) {
       personalKeywords.value = localStorage.getItem(personalKeywordsKey) || "";
+    }
+    const avoidKeywords = form && form.querySelector('[name="avoid_keywords"]');
+    if (avoidKeywords && !avoidKeywords.value) {
+      avoidKeywords.value = localStorage.getItem(avoidKeywordsKey) || "";
     }
   } catch (e) {
     console.warn("Could not load /api/config defaults:", e);

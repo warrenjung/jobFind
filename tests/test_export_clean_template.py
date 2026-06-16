@@ -54,6 +54,14 @@ class TestResultPublishing:
         assert "sourceLabel" in ect.PAGE_SCRIPT
 
 
+class TestRankingExplanationStyles:
+    def test_explanation_styles_are_present(self):
+        assert ".ranking-explanation" in ect.PAGE_CSS
+        assert ".reason-list li.positive" in ect.PAGE_CSS
+        assert ".reason-list li.negative" in ect.PAGE_CSS
+        assert ".keyword-chip.avoid" in ect.PAGE_CSS
+
+
 class TestTimestamp:
     def test_timestamp_is_nonempty_string(self):
         assert isinstance(ect.generated_timestamp(), str)

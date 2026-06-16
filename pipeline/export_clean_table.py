@@ -75,6 +75,10 @@ def format_source(job: dict[str, Any]) -> str:
         return "USAJOBS"
     if source == "careeronestop":
         return "CareerOneStop"
+    if source == "ats_greenhouse":
+        return "Greenhouse"
+    if source == "ats_lever":
+        return "Lever"
     return NOT_SPECIFIED
 
 
@@ -164,9 +168,18 @@ def source_filter_options(jobs: list[dict[str, Any]]) -> str:
         "indeed": "Indeed",
         "usajobs": "USAJOBS",
         "careeronestop": "CareerOneStop",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever",
         "not-specified": "Not specified",
     }
-    preferred_order = ["indeed", "usajobs", "careeronestop", "not-specified"]
+    preferred_order = [
+        "indeed",
+        "usajobs",
+        "careeronestop",
+        "greenhouse",
+        "lever",
+        "not-specified",
+    ]
     present = {source_filter_value(job) for job in jobs}
     ordered = [value for value in preferred_order if value in present]
     ordered.extend(sorted(present - set(ordered)))
@@ -380,6 +393,60 @@ def detail_row(label: str, value: str) -> str:
           </div>"""
 
 
+def reason_class(reason: Any) -> str:
+    """Classify a score reason for readable HTML styling."""
+    text = clean_text(reason)
+    if text.startswith("+"):
+        return "positive"
+    if text.startswith("-"):
+        return "negative"
+    return "neutral"
+
+
+def keyword_chips(keywords: Any, chip_class: str = "") -> str:
+    """Render matched keyword chips for the ranking explanation."""
+    values = [clean_text(value) for value in (keywords or []) if clean_text(value) != NOT_SPECIFIED]
+    if not values:
+        return ""
+    class_attr = f"keyword-chip {chip_class}".strip()
+    return '<div class="keyword-chips">' + "".join(
+        f'<span class="{html.escape(class_attr, quote=True)}">{html_text(value)}</span>'
+        for value in values
+    ) + "</div>"
+
+
+def ranking_explanation_html(job: dict[str, Any]) -> str:
+    """Render an expandable explanation for why a job received its score."""
+    reasons = job.get("rating_reasons") or []
+    if not isinstance(reasons, list):
+        reasons = []
+    reason_items = "".join(
+        f'<li class="{reason_class(reason)}">{html_text(reason)}</li>'
+        for reason in reasons
+    )
+    if not reason_items:
+        reason_items = '<li class="neutral">No scoring details available.</li>'
+
+    matched_personal = keyword_chips(job.get("matched_personal_keywords"))
+    matched_avoid = keyword_chips(job.get("matched_avoid_keywords"), "avoid")
+    keyword_blocks = "".join(
+        block for block in [
+            f"<p>Matched preferred keywords</p>{matched_personal}" if matched_personal else "",
+            f"<p>Matched avoid keywords</p>{matched_avoid}" if matched_avoid else "",
+        ] if block
+    )
+
+    return f"""
+        <details class="ranking-explanation">
+          <summary>Why ranked here</summary>
+          <div class="ranking-body">
+            <p>Score {html_text(job.get("student_fit_score"))} · {html_text(job.get("rating_label"))}</p>
+            {keyword_blocks}
+            <ul class="reason-list">{reason_items}</ul>
+          </div>
+        </details>"""
+
+
 def build_html_cards(
     jobs: list[dict[str, Any]],
     limit: Optional[int],
@@ -406,6 +473,10 @@ def build_html_cards(
                 detail_row(
                     "Matches your keywords",
                     html_text(", ".join(job.get("matched_personal_keywords") or [])),
+                ),
+                detail_row(
+                    "Avoid keyword matches",
+                    html_text(", ".join(job.get("matched_avoid_keywords") or [])),
                 ),
                 detail_row("Pay", html_text(job.get("pay"))),
                 detail_row("Distance", html_text(format_distance(job.get("distance_miles")))),
@@ -439,6 +510,7 @@ def build_html_cards(
           <span class="score">Score {html_text(job.get("student_fit_score"))}</span>
         </div>
         <h2>{title}</h2>
+        {ranking_explanation_html(job)}
         <dl>{rows}
         </dl>
         <div class="card-actions">{assistant_button}</div>

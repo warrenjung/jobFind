@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "provider": "greenhouse",
+      "board_token": "example-greenhouse-board",
+      "company": "Example Greenhouse Company"
+    },
+    {
+      "provider": "lever",
+      "site": "example-lever-site",
+      "company": "Example Lever Company"
+    }
+  ]
+}

@@ -1,9 +1,10 @@
 # Job Finder
 
 Find entry-level, teen-friendly summer jobs near any city. Scrapes **Indeed** by
-default, with optional **USAJOBS** and **CareerOneStop** sources. It ranks
-everything by fit for an ~18-year-old with no degree, license, or certification,
-then exports an interactive HTML page you can filter and sort.
+default, with optional **USAJOBS**, **CareerOneStop**, and company career-page
+sources such as **Greenhouse** and **Lever**. It ranks everything by fit for an
+~18-year-old with no degree, license, or certification, then exports an
+interactive HTML page you can filter and sort.
 
 > **Note:** USAJOBS is **off by default** — it returns remote/nationwide federal
 > career roles (analyst, physician, etc.) that aren't realistic teen jobs. Add
@@ -14,8 +15,9 @@ then exports an interactive HTML page you can filter and sort.
 ```
 Indeed (Playwright headless browser) ───────┐
 USAJOBS API (optional) ──────────────────────┼─► rank_jobs.py ──► jobs_ranked.json
-CareerOneStop Jobs V2 API (optional) ───────┘                      ▼
-  └─ scrape_indeed.py                                      jobs_clean.html
+CareerOneStop Jobs V2 API (optional) ───────┤                      ▼
+Greenhouse/Lever career pages (optional) ───┘              jobs_clean.html
+  └─ scrape_indeed.py
   └─ pipeline/build_csv.py (filter)
 ```
 
@@ -23,9 +25,10 @@ CareerOneStop Jobs V2 API (optional) ───────┘                   
 2. `pipeline/build_csv.py` — filters out jobs requiring degrees, licenses, or 3+ years experience
 3. `usajobs_summer_scraper.py` — fetches federal roles from USAJOBS (optional, `--include-usajobs`)
 4. `careeronestop_scraper.py` — fetches local listings from CareerOneStop Jobs V2 (optional)
-5. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
-6. `export_clean_table.py` — exports the interactive HTML page
-7. `run_job_pipeline.py` — orchestrates all of the above in one command
+5. `ats_scraper.py` — fetches configured Greenhouse/Lever career-page listings (optional)
+6. `rank_jobs.py` — scores and ranks all jobs; outputs `jobs_ranked.json`
+7. `export_clean_table.py` — exports the interactive HTML page
+8. `run_job_pipeline.py` — orchestrates all of the above in one command
 
 ## Setup
 
@@ -80,6 +83,36 @@ export CAREERONESTOP_USER_ID=YOUR_USER_ID
 export CAREERONESTOP_API_TOKEN=YOUR_API_TOKEN
 ```
 
+### Greenhouse/Lever company boards
+
+Company career pages are optional and do not need API keys. Copy the example
+config, then replace the sample board names with companies you want to track:
+
+```bash
+cp ats_sources.example.json ats_sources.json
+```
+
+```json
+// ats_sources.json
+{
+  "sources": [
+    {
+      "provider": "greenhouse",
+      "board_token": "sweetgreen",
+      "company": "Sweetgreen"
+    },
+    {
+      "provider": "lever",
+      "site": "example-company",
+      "company": "Example Company"
+    }
+  ]
+}
+```
+
+`ats_sources.json` is gitignored because it is your personal source list. Use
+`make run-with-ats` after adding real Greenhouse board tokens or Lever sites.
+
 ## Usage
 
 ```bash
@@ -104,6 +137,9 @@ make run-with-usajobs LOCATION="Cupertino, CA"
 # Include CareerOneStop after NLx Jobs API access is approved
 make run-with-careeronestop LOCATION="Cupertino, CA"
 
+# Include configured Greenhouse/Lever company career pages
+make run-with-ats LOCATION="Cupertino, CA"
+
 # Run the unit tests
 make test
 
@@ -127,6 +163,7 @@ make run-fast         Faster smoke run with fewer Indeed queries/pages
 make run-skip-indeed  Re-rank using the existing Indeed CSV
 make run-with-usajobs Run the pipeline and include USAJOBS federal results
 make run-with-careeronestop Include CareerOneStop API results once NLx access is approved
+make run-with-ats     Include configured Greenhouse/Lever company career-page sources
 make table            Regenerate the readable HTML cards
 make app              Run the local browser search app
 make serve            Serve the HTML results over HTTP (port 8000)
@@ -137,7 +174,7 @@ make help             Show this message
 
 Override any default:
 ```bash
-make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30 KEYWORDS="barista, tutoring"
+make run LOCATION="Seattle, WA" RADIUS=25 PAGES=5 MIN_SCORE=60 FROMAGE=30 KEYWORDS="barista, tutoring" AVOID_KEYWORDS="manager, overnight"
 ```
 
 `FROMAGE` controls the Indeed freshness window in days (default 14; use 0 for no
@@ -148,6 +185,8 @@ closest — all client-side, no rerun needed.
 `KEYWORDS` is optional. Use it to personalize ranking toward the kinds of jobs
 you want, such as `barista, tutoring, summer camp`. Matching jobs get a moderate
 score boost without replacing the built-in student-friendly scoring rules.
+`AVOID_KEYWORDS` is also optional. Use it for terms that should lower a job's
+rank, such as `manager, overnight, full-time, medical, driver`.
 
 For targeted Indeed experiments, pass custom queries directly:
 ```bash
@@ -157,6 +196,11 @@ python3 pipeline/run_job_pipeline.py --location "Seattle, WA" --indeed-queries c
 CareerOneStop-specific options are used by `make run-with-careeronestop`:
 ```bash
 make run-with-careeronestop LOCATION="Seattle, WA" CAREER_RESULTS=50 CAREER_DAYS=60
+```
+
+Greenhouse/Lever company boards are used by `make run-with-ats`:
+```bash
+make run-with-ats LOCATION="Seattle, WA" ATS_CONFIG=ats_sources.json
 ```
 
 The readable HTML output hides obvious poor fits by default, only showing jobs
@@ -172,8 +216,8 @@ make app
 
 Then open [http://localhost:8000](http://localhost:8000). The page lets you
 enter a location, choose a radius, pick Fast or Full mode, set a minimum score,
-add preferred job keywords for personalized scoring, and refresh the embedded
-results page from the browser.
+add preferred and avoid keywords for personalized scoring, and refresh the
+embedded results page from the browser.
 
 The local app also includes an Apply Assistant for Indeed jobs. Click
 `Apply Assistant` on a job card to load it into the side panel, copy saved
@@ -267,6 +311,7 @@ All generated files are written to `data/` (created automatically, gitignored):
 | `data/saved_answers.md` | Readable local answer notebook generated from saved answers |
 | `data/jobs_raw.json` | Raw USAJOBS results |
 | `data/jobs_careeronestop_<city>.json` | Optional raw CareerOneStop API results |
+| `data/jobs_ats.json` | Optional normalized Greenhouse/Lever career-page results |
 | `data/jobs_scraped_<city>.json` | Raw Indeed cards from the scraper |
 | `data/indeed_jobs_<city>.csv` | Filtered teen-friendly Indeed jobs |
 | `data/indeed_jobs_<city>_excluded.csv` | Filtered-out jobs and reasons |
@@ -306,11 +351,13 @@ jobFind/
 │   ├── rank_jobs.py                # Scoring + ranking engine
 │   ├── export_clean_table.py       # Human-readable HTML/Markdown exporter
 │   ├── careeronestop_scraper.py    # CareerOneStop Jobs V2 API client
+│   ├── ats_scraper.py              # Optional Greenhouse/Lever source client
 │   ├── usajobs_summer_scraper.py   # USAJOBS API client
 │   └── build_csv.py               # Filter scraped JSON → clean CSV
 ├── data/                           # Generated outputs (gitignored, auto-created)
 ├── usajobs_credentials.json        # Your USAJOBS API key (gitignored)
 ├── careeronestop_credentials.json  # Your CareerOneStop API token (gitignored)
+├── ats_sources.json                # Your optional company-board list (gitignored)
 ├── Makefile                        # install / run / clean targets
 ├── requirements.txt                # Python dependencies
 └── README.md

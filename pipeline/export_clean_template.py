@@ -311,6 +311,93 @@ PAGE_CSS = """
       display: none;
     }
 
+    .ranking-explanation {
+      margin: 10px 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card-soft);
+      overflow: hidden;
+    }
+
+    .ranking-explanation summary {
+      min-height: 36px;
+      padding: 8px 11px;
+      color: var(--accent-strong);
+      font-weight: 700;
+      cursor: pointer;
+      list-style-position: inside;
+    }
+
+    .ranking-explanation[open] summary {
+      border-bottom: 1px solid var(--line);
+      background: #f4f8f7;
+    }
+
+    .ranking-body {
+      display: grid;
+      gap: 10px;
+      padding: 11px;
+    }
+
+    .ranking-body p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .keyword-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .keyword-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .keyword-chip.avoid {
+      background: #f6e8e4;
+      color: #8f3f2a;
+    }
+
+    .reason-list {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reason-list li {
+      padding: 7px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .reason-list li.positive {
+      border-color: #cfe2dc;
+      background: #f5fbf8;
+      color: var(--accent-strong);
+    }
+
+    .reason-list li.negative {
+      border-color: #ecd4cc;
+      background: #fff7f4;
+      color: #8f3f2a;
+    }
+
     dt {
       color: var(--muted);
       font-size: 12px;

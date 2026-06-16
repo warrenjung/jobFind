@@ -5,8 +5,10 @@ RESULTS  ?= 25
 MIN_SCORE ?= 50
 FROMAGE  ?= 14
 KEYWORDS ?=
+AVOID_KEYWORDS ?=
 CAREER_RESULTS ?= 25
 CAREER_DAYS ?= 30
+ATS_CONFIG ?= ats_sources.json
 PORT     ?= 8000
 PYTHON   := python3
 
@@ -27,6 +29,7 @@ run: ## Run the full pipeline  (override location: make run LOCATION="San Jose, 
 		--indeed-pages $(PAGES) \
 		--indeed-fromage $(FROMAGE) \
 		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-wide
@@ -42,6 +45,7 @@ run-fast: ## Faster smoke run with fewer Indeed queries/pages
 		--indeed-fromage $(FROMAGE) \
 		--indeed-queries cashier "retail associate" barista \
 		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-skip-indeed
@@ -50,6 +54,7 @@ run-skip-indeed: ## Re-rank using the existing Indeed CSV (no scraping)
 		--location "$(LOCATION)" \
 		--skip-indeed \
 		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-with-usajobs
@@ -62,6 +67,7 @@ run-with-usajobs: ## Run the pipeline and include USAJOBS federal results
 		--include-usajobs \
 		--num-usajobs-results $(RESULTS) \
 		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 .PHONY: run-with-careeronestop
@@ -75,6 +81,20 @@ run-with-careeronestop: ## Include CareerOneStop API results once NLx access is 
 		--careeronestop-results $(CAREER_RESULTS) \
 		--careeronestop-days $(CAREER_DAYS) \
 		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
+		--clean-min-score $(MIN_SCORE)
+
+.PHONY: run-with-ats
+run-with-ats: ## Include configured Greenhouse/Lever company career-page sources
+	$(PYTHON) pipeline/run_job_pipeline.py \
+		--location "$(LOCATION)" \
+		--indeed-radius $(RADIUS) \
+		--indeed-pages $(PAGES) \
+		--indeed-fromage $(FROMAGE) \
+		--include-ats \
+		--ats-config "$(ATS_CONFIG)" \
+		--personal-keywords "$(KEYWORDS)" \
+		--avoid-keywords "$(AVOID_KEYWORDS)" \
 		--clean-min-score $(MIN_SCORE)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

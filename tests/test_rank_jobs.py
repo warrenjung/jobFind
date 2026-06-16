@@ -56,6 +56,11 @@ class TestScoreSourceFit:
         score, _ = rj.score_source_fit({"source": "careeronestop"})
         assert score == 2
 
+    def test_ats_bonus(self):
+        score, reasons = rj.score_source_fit({"source": "ats_greenhouse"})
+        assert score == 3
+        assert reasons == ["+3 direct company career page source"]
+
 
 class TestPersonalKeywordScoring:
     JOB = {
@@ -104,6 +109,49 @@ class TestPersonalKeywordScoring:
     def test_rate_job_no_keywords_has_empty_matches(self):
         assert rj.rate_job(self.JOB, [])["matched_personal_keywords"] == []
 
+    def test_blank_avoid_keywords_no_score(self):
+        score, reasons, matched = rj.score_avoid_keywords(self.JOB, [])
+
+        assert score == 0
+        assert reasons == []
+        assert matched == []
+
+    def test_avoid_keyword_match_penalizes_phrase_case_insensitive(self):
+        score, reasons, matched = rj.score_avoid_keywords(
+            {**self.JOB, "description": "Overnight tutoring shift."},
+            ["overnight"],
+        )
+
+        assert score == rj.AVOID_KEYWORD_POINTS
+        assert reasons == ["-10 avoid keyword match: overnight"]
+        assert matched == ["overnight"]
+
+    def test_avoid_keyword_score_is_capped(self):
+        score, reasons, matched = rj.score_avoid_keywords(
+            {**self.JOB, "description": "Manager overnight full-time medical driver role."},
+            ["manager", "overnight", "full-time", "medical", "driver"],
+        )
+
+        assert score == rj.AVOID_KEYWORD_CAP
+        assert f"score capped at {rj.AVOID_KEYWORD_CAP} for avoid keyword matches" in reasons
+        assert matched == ["manager", "overnight", "full-time", "medical", "driver"]
+
+    def test_rate_job_includes_avoid_keyword_reason(self):
+        rated = rj.rate_job({**self.JOB, "description": "Overnight shift."}, [], ["overnight"])
+
+        assert any("avoid keyword match: overnight" in reason for reason in rated["rating_reasons"])
+        assert rated["matched_avoid_keywords"] == ["overnight"]
+
+    def test_preferred_and_avoid_keywords_can_both_match(self):
+        rated = rj.rate_job(
+            {**self.JOB, "description": "Tutor opening with full-time schedule."},
+            ["tutor"],
+            ["full-time"],
+        )
+
+        assert rated["matched_personal_keywords"] == ["tutor"]
+        assert rated["matched_avoid_keywords"] == ["full-time"]
+
     def test_rank_jobs_accepts_personal_keywords(self):
         jobs = [
             {**self.JOB, "title": "Tutor", "url": "https://example.com/tutor"},
@@ -114,6 +162,16 @@ class TestPersonalKeywordScoring:
 
         assert ranked[0]["title"] == "Tutor"
         assert any("personal keyword match: tutor" in reason for reason in ranked[0]["rating_reasons"])
+
+    def test_rank_jobs_accepts_avoid_keywords(self):
+        jobs = [
+            {**self.JOB, "title": "Tutor", "description": "Overnight tutoring shift.", "url": "https://example.com/tutor"},
+        ]
+
+        ranked = rj.rank_jobs(jobs, "Cupertino, CA", [], ["overnight"])
+
+        assert ranked[0]["matched_avoid_keywords"] == ["overnight"]
+        assert any("avoid keyword match: overnight" in reason for reason in ranked[0]["rating_reasons"])
 
 
 class TestDedupeJobs:
@@ -145,3 +203,34 @@ class TestLoadUsajobsOptional:
     def test_missing_file_returns_empty(self):
         assert rj.load_usajobs("") == []
         assert rj.load_usajobs("/nonexistent/path/jobs_raw.json") == []
+
+
+class TestLoadAtsJobs:
+    def test_blank_file_returns_empty(self):
+        assert rj.load_ats_jobs("") == []
+
+    def test_normalizes_ats_rows(self, tmp_path):
+        path = tmp_path / "jobs_ats.json"
+        path.write_text(
+            """[
+              {
+                "source": "ats_lever",
+                "source_id": "lever:acme:1",
+                "title": "Barista",
+                "company": "Acme Cafe",
+                "location": "Cupertino, CA",
+                "pay": "$18-$22 an hour",
+                "job_type": "Part-time",
+                "description": "Customer service role.",
+                "url": "https://jobs.lever.co/acme/1"
+              }
+            ]""",
+            encoding="utf-8",
+        )
+
+        jobs = rj.load_ats_jobs(str(path))
+
+        assert jobs[0]["source"] == "ats_lever"
+        assert jobs[0]["city"] == "Cupertino"
+        assert jobs[0]["state"] == "CA"
+        assert jobs[0]["hourly_pay_estimate"] == 20.0

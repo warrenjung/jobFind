@@ -51,6 +51,17 @@ class TestValidateForm:
 
         assert error == "Preferred job keywords are too long."
 
+    def test_accepts_avoid_keywords(self):
+        opts, error = lss.validate_form({"avoid_keywords": [" manager, overnight "]})
+
+        assert error is None
+        assert opts["avoid_keywords"] == "manager, overnight"
+
+    def test_rejects_too_long_avoid_keywords(self):
+        _, error = lss.validate_form({"avoid_keywords": ["x" * (lss.MAX_AVOID_KEYWORDS_LENGTH + 1)]})
+
+        assert error == "Avoid keywords are too long."
+
 
 class TestBuildPipelineCommand:
     def _opts(self, mode="fast"):
@@ -89,6 +100,27 @@ class TestBuildPipelineCommand:
 
         i = cmd.index("--personal-keywords")
         assert cmd[i + 1] == "barista, tutoring"
+
+    def test_omits_blank_avoid_keywords(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "avoid_keywords": ""})
+
+        assert "--avoid-keywords" not in cmd
+
+    def test_passes_avoid_keywords_when_present(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "avoid_keywords": "manager, overnight"})
+
+        i = cmd.index("--avoid-keywords")
+        assert cmd[i + 1] == "manager, overnight"
+
+    def test_omits_ats_when_not_selected(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "include_ats": ""})
+
+        assert "--include-ats" not in cmd
+
+    def test_passes_ats_when_selected(self):
+        cmd = lss.build_pipeline_command({**self._opts("fast"), "include_ats": "1"})
+
+        assert "--include-ats" in cmd
 
 
 class TestApplicationTracking:
@@ -185,6 +217,19 @@ class TestApplicationTracking:
 
         assert 'name="personal_keywords"' in html
         assert "jobfind.personalKeywords" in script
+
+    def test_static_dashboard_has_avoid_keywords_field(self):
+        html = (lss.STATIC_DIR / "index.html").read_text()
+        script = (lss.STATIC_DIR / "app.js").read_text()
+
+        assert 'name="avoid_keywords"' in html
+        assert "jobfind.avoidKeywords" in script
+
+    def test_static_dashboard_has_ats_checkbox(self):
+        html = (lss.STATIC_DIR / "index.html").read_text()
+
+        assert 'name="include_ats"' in html
+        assert "Include Greenhouse/Lever boards" in html
 
 
 class TestSavedAnswers:

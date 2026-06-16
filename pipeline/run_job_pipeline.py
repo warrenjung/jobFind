@@ -6,11 +6,13 @@ This script coordinates the pieces in this project:
 2. Scrape Indeed with a headless Playwright browser (scrape_indeed.py).
 3. Build an Indeed CSV from the scraped JSON (build_csv.py).
 4. Optionally refresh CareerOneStop results for a location.
-5. Rank the combined USAJOBS + Indeed + CareerOneStop results into jobs_ranked.json.
-6. Export a clean HTML page for easy reading.
+5. Optionally fetch company career-page jobs from Greenhouse/Lever boards.
+6. Rank the combined job sources into jobs_ranked.json.
+7. Export a clean HTML page for easy reading.
 
 Pass --skip-indeed to skip steps 2-3 and use an existing Indeed CSV.
 Pass --include-careeronestop to include CareerOneStop once Jobs API access works.
+Pass --include-ats to include configured Greenhouse/Lever company boards.
 """
 
 import argparse
@@ -32,9 +34,12 @@ DEFAULT_CLEAN_MIN_SCORE = 50
 DEFAULT_RESULTS = 25
 DEFAULT_CAREERONESTOP_RESULTS = 25
 DEFAULT_CAREERONESTOP_DAYS = 30
+DEFAULT_ATS_CONFIG = _HERE.parent / "ats_sources.json"
+DEFAULT_ATS_FILE = DATA_DIR / "jobs_ats.json"
 INDEED_HELPER = _HERE / "build_csv.py"
 INDEED_SCRAPER = _HERE / "scrape_indeed.py"
 CAREERONESTOP_SCRAPER = _HERE / "careeronestop_scraper.py"
+ATS_SCRAPER = _HERE / "ats_scraper.py"
 CLEAN_TABLE_EXPORTER = _HERE / "export_clean_table.py"
 
 
@@ -203,6 +208,40 @@ def fetch_careeronestop_jobs(
     return output_json
 
 
+def fetch_ats_jobs(
+    location: str,
+    ats_file: Optional[str],
+    ats_config: str,
+    include_remote: bool,
+) -> Path:
+    """Run the optional Greenhouse/Lever ATS fetcher and return the JSON path."""
+    if not ATS_SCRAPER.exists():
+        raise SystemExit(f"Could not find ATS scraper at {ATS_SCRAPER}.")
+
+    config_path = Path(ats_config)
+    if not config_path.exists():
+        raise SystemExit(
+            f"\n--include-ats was passed but no ATS config was found at {config_path}.\n"
+            "Copy ats_sources.example.json to ats_sources.json and add company boards first."
+        )
+
+    output_json = Path(ats_file) if ats_file else DEFAULT_ATS_FILE
+    command = [
+        sys.executable,
+        str(ATS_SCRAPER),
+        "--config",
+        str(config_path),
+        "--location",
+        location,
+        "--output",
+        str(output_json),
+    ]
+    if include_remote:
+        command.append("--include-remote")
+    run_command(command)
+    return output_json
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Refresh USAJOBS, prepare Indeed data, and rank jobs."
@@ -238,6 +277,16 @@ def main() -> None:
         help="CareerOneStop JSON file. Default: jobs_careeronestop_<location>.json.",
     )
     parser.add_argument(
+        "--ats-file",
+        default=None,
+        help=f"ATS JSON file. Default: {DEFAULT_ATS_FILE}.",
+    )
+    parser.add_argument(
+        "--ats-config",
+        default=DEFAULT_ATS_CONFIG,
+        help=f"Greenhouse/Lever source config. Default: {DEFAULT_ATS_CONFIG}.",
+    )
+    parser.add_argument(
         "--clean-output",
         default=DEFAULT_CLEAN_FILE,
         help=f"Clean HTML output file. Default: {DEFAULT_CLEAN_FILE}.",
@@ -261,6 +310,11 @@ def main() -> None:
         "--personal-keywords",
         default="",
         help="Comma-separated preferred job terms to boost during ranking.",
+    )
+    parser.add_argument(
+        "--avoid-keywords",
+        default="",
+        help="Comma-separated job terms to penalize during ranking.",
     )
     parser.add_argument(
         "--skip-clean-table",
@@ -293,6 +347,21 @@ def main() -> None:
         "--include-careeronestop",
         action="store_true",
         help="Include CareerOneStop API results. Off by default until Jobs API access is approved.",
+    )
+    parser.add_argument(
+        "--include-ats",
+        action="store_true",
+        help="Include configured Greenhouse/Lever company career-page results.",
+    )
+    parser.add_argument(
+        "--skip-ats",
+        action="store_true",
+        help="Skip Greenhouse/Lever ATS fetching and ranking.",
+    )
+    parser.add_argument(
+        "--ats-include-remote",
+        action="store_true",
+        help="Keep remote ATS jobs when a location filter is provided.",
     )
     parser.add_argument(
         "--indeed-radius",
@@ -411,6 +480,19 @@ def main() -> None:
     else:
         print("\nSkipping CareerOneStop by default. Use --include-careeronestop after NLx Jobs API access is approved.")
 
+    ats_json = None
+    if args.include_ats and not args.skip_ats:
+        ats_json = fetch_ats_jobs(
+            args.location,
+            args.ats_file,
+            str(args.ats_config),
+            args.ats_include_remote,
+        )
+    elif args.skip_ats:
+        print("\nSkipping Greenhouse/Lever ATS sources (--skip-ats).")
+    else:
+        print("\nSkipping Greenhouse/Lever ATS sources by default. Use --include-ats after adding ats_sources.json.")
+
     rank_command = [
         sys.executable,
         str(_HERE / "rank_jobs.py"),
@@ -427,8 +509,12 @@ def main() -> None:
     ]
     if args.personal_keywords.strip():
         rank_command.extend(["--personal-keywords", args.personal_keywords])
+    if args.avoid_keywords.strip():
+        rank_command.extend(["--avoid-keywords", args.avoid_keywords])
     if careeronestop_json is not None:
         rank_command.extend(["--careeronestop-file", str(careeronestop_json)])
+    if ats_json is not None:
+        rank_command.extend(["--ats-file", str(ats_json)])
 
     run_command(
         rank_command

@@ -1,11 +1,12 @@
 """
-Rate and sort jobs from USAJOBS, Indeed, and CareerOneStop for high-school
-summer job fit.
+Rate and sort jobs from USAJOBS, Indeed, CareerOneStop, and optional ATS
+career-page sources for high-school summer job fit.
 
 Inputs:
 - jobs_raw.json
 - indeed_jobs_cupertino.csv
 - jobs_careeronestop_<location>.json
+- jobs_ats.json
 
 Output:
 - jobs_ranked.json
@@ -30,10 +31,13 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_USAJOBS_FILE = str(DATA_DIR / "jobs_raw.json")
 DEFAULT_INDEED_FILE = str(DATA_DIR / "indeed_jobs_cupertino.csv")
 DEFAULT_CAREERONESTOP_FILE = ""
+DEFAULT_ATS_FILE = ""
 DEFAULT_OUTPUT_FILE = str(DATA_DIR / "jobs_ranked.json")
 DEFAULT_HOME_LOCATION = "Cupertino, CA"
 PERSONAL_KEYWORD_POINTS = 8
 PERSONAL_KEYWORD_CAP = 25
+AVOID_KEYWORD_POINTS = -10
+AVOID_KEYWORD_CAP = -35
 from utils import NOT_SPECIFIED, format_row, parse_float
 
 
@@ -187,6 +191,20 @@ def load_careeronestop_jobs(filename: str) -> list[dict[str, Any]]:
     return [normalize_careeronestop_job(row) for row in rows if isinstance(row, dict)]
 
 
+def load_ats_jobs(filename: str) -> list[dict[str, Any]]:
+    """Load and normalize optional Greenhouse/Lever ATS JSON records."""
+    if not filename:
+        return []
+
+    with open(filename, "r", encoding="utf-8") as file:
+        rows = json.load(file)
+
+    if not isinstance(rows, list):
+        raise SystemExit(f"{filename} must contain a list of ATS jobs.")
+
+    return [normalize_ats_job(row) for row in rows if isinstance(row, dict)]
+
+
 def normalize_usajobs_job(row: dict[str, Any]) -> dict[str, Any]:
     """Convert one USAJOBS row to the common job shape."""
     pay = format_usajobs_pay(row)
@@ -267,6 +285,34 @@ def normalize_careeronestop_job(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_ats_job(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert one normalized ATS scraper row to the common job shape."""
+    pay = clean_value(row.get("pay"))
+    return {
+        "source": clean_value(row.get("source")),
+        "source_id": clean_value(row.get("source_id") or row.get("job_id")),
+        "title": clean_value(row.get("title")),
+        "company": clean_value(row.get("company")),
+        "department": clean_value(row.get("department")),
+        "location": clean_value(row.get("location")),
+        "city": clean_value(row.get("city")) if row.get("city") else extract_city(row.get("location")),
+        "state": clean_value(row.get("state")) if row.get("state") else extract_state(row.get("location")),
+        "latitude": parse_float(row.get("latitude")),
+        "longitude": parse_float(row.get("longitude")),
+        "pay": pay,
+        "hourly_pay_estimate": parse_hourly_pay(pay),
+        "job_type": clean_value(row.get("job_type")),
+        "schedule": clean_value(row.get("schedule")),
+        "date_posted": clean_value(row.get("date_posted")),
+        "deadline": clean_value(row.get("deadline")),
+        "teen_fit_reason": clean_value(row.get("teen_fit_reason")),
+        "description": clean_value(row.get("description")),
+        "url": clean_value(row.get("url") or row.get("job_url")),
+        "ats_provider": clean_value(row.get("ats_provider")),
+        "ats_board": clean_value(row.get("ats_board")),
+    }
+
+
 def format_usajobs_pay(row: dict[str, Any]) -> str:
     """Format USAJOBS salary fields into one text value."""
     salary_min = clean_value(row.get("salary_min"))
@@ -324,6 +370,7 @@ def parse_hourly_pay(pay: Any) -> Optional[float]:
 def rate_job(
     job: dict[str, Any],
     personal_keywords: Optional[list[str]] = None,
+    avoid_keywords: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Score one normalized job for high-school student suitability."""
     score = 20
@@ -331,6 +378,7 @@ def rate_job(
 
     keyword_score, keyword_reasons = score_keywords(job, GOOD_KEYWORDS, cap=35)
     personal_score, personal_reasons, personal_matches = score_personal_keywords(job, personal_keywords or [])
+    avoid_score, avoid_reasons, avoid_matches = score_avoid_keywords(job, avoid_keywords or [])
     penalty_score, penalty_reasons = score_keywords(job, BAD_KEYWORDS, cap=None)
     metadata_score, metadata_reasons = score_teen_fit_metadata(job)
     schedule_score, schedule_reasons = score_schedule(job)
@@ -341,6 +389,7 @@ def rate_job(
 
     score += keyword_score
     score += personal_score
+    score += avoid_score
     score += penalty_score
     score += metadata_score
     score += schedule_score
@@ -351,6 +400,7 @@ def rate_job(
 
     reasons.extend(keyword_reasons)
     reasons.extend(personal_reasons)
+    reasons.extend(avoid_reasons)
     reasons.extend(penalty_reasons)
     reasons.extend(metadata_reasons)
     reasons.extend(schedule_reasons)
@@ -365,6 +415,7 @@ def rate_job(
         "rating_label": label_score(score),
         "rating_reasons": reasons,
         "matched_personal_keywords": personal_matches,
+        "matched_avoid_keywords": avoid_matches,
     }
 
 
@@ -410,6 +461,11 @@ def parse_personal_keywords(value: Any) -> list[str]:
     return keywords
 
 
+def parse_avoid_keywords(value: Any) -> list[str]:
+    """Parse comma-separated avoid/preference penalty phrases."""
+    return parse_personal_keywords(value)
+
+
 def score_personal_keywords(
     job: dict[str, Any],
     personal_keywords: list[str],
@@ -435,6 +491,31 @@ def score_personal_keywords(
     if total > PERSONAL_KEYWORD_CAP:
         reasons.append(f"score capped at +{PERSONAL_KEYWORD_CAP} for personal keyword matches")
         total = PERSONAL_KEYWORD_CAP
+
+    return total, reasons, matched
+
+
+def score_avoid_keywords(
+    job: dict[str, Any],
+    avoid_keywords: list[str],
+) -> tuple[int, list[str], list[str]]:
+    """Score user-selected keywords that should make a job less attractive."""
+    if not avoid_keywords:
+        return 0, [], []
+
+    text = f"{searchable_text(job)} {metadata_text(job)}"
+    total = 0
+    reasons = []
+    matched = []
+    for keyword in avoid_keywords:
+        if contains_phrase(text, keyword):
+            total += AVOID_KEYWORD_POINTS
+            reasons.append(f"{AVOID_KEYWORD_POINTS} avoid keyword match: {keyword}")
+            matched.append(keyword)
+
+    if total < AVOID_KEYWORD_CAP:
+        reasons.append(f"score capped at {AVOID_KEYWORD_CAP} for avoid keyword matches")
+        total = AVOID_KEYWORD_CAP
 
     return total, reasons, matched
 
@@ -648,6 +729,9 @@ def score_source_fit(job: dict[str, Any]) -> tuple[int, list[str]]:
     if job.get("source") == "careeronestop":
         return 2, ["+2 CareerOneStop listing has structured local API data"]
 
+    if job.get("source") in {"ats_greenhouse", "ats_lever"}:
+        return 3, ["+3 direct company career page source"]
+
     return 0, []
 
 
@@ -716,10 +800,12 @@ def rank_jobs(
     jobs: list[dict[str, Any]],
     home_location: str,
     personal_keywords: Optional[list[str]] = None,
+    avoid_keywords: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Rate and sort jobs from highest to lowest student fit."""
     home_coordinates = coordinates_for_location(home_location)
     personal_keywords = personal_keywords or []
+    avoid_keywords = avoid_keywords or []
     ranked_jobs = []
     for job in jobs:
         source_distance = parse_float(job.get("distance_miles"))
@@ -727,7 +813,7 @@ def rank_jobs(
             job["distance_miles"] = source_distance
         else:
             job["distance_miles"] = estimate_distance_miles(job, home_coordinates)
-        rating = rate_job(job, personal_keywords)
+        rating = rate_job(job, personal_keywords, avoid_keywords)
         ranked_jobs.append({**job, "home_location": home_location, **rating})
 
     ranked_jobs.sort(
@@ -833,13 +919,14 @@ def main() -> None:
     """Load, rate, sort, save, and preview jobs from all configured sources."""
     parser = argparse.ArgumentParser(
         description=(
-            "Rank USAJOBS, Indeed, and CareerOneStop listings by high-school "
-            "summer job fit."
+            "Rank USAJOBS, Indeed, CareerOneStop, and optional ATS listings "
+            "by high-school summer job fit."
         )
     )
     parser.add_argument("--usajobs-file", default=DEFAULT_USAJOBS_FILE)
     parser.add_argument("--indeed-file", default=DEFAULT_INDEED_FILE)
     parser.add_argument("--careeronestop-file", default=DEFAULT_CAREERONESTOP_FILE)
+    parser.add_argument("--ats-file", default=DEFAULT_ATS_FILE)
     parser.add_argument("--output", default=DEFAULT_OUTPUT_FILE)
     parser.add_argument(
         "--home-location",
@@ -855,17 +942,24 @@ def main() -> None:
         default="",
         help="Comma-separated preferred job terms to boost in scoring.",
     )
+    parser.add_argument(
+        "--avoid-keywords",
+        default="",
+        help="Comma-separated job terms to penalize during scoring.",
+    )
     args = parser.parse_args()
 
     home_location = resolve_home_location(args.home_location)
     personal_keywords = parse_personal_keywords(args.personal_keywords)
+    avoid_keywords = parse_avoid_keywords(args.avoid_keywords)
     jobs = (
         load_usajobs(args.usajobs_file)
         + load_indeed_jobs(args.indeed_file)
         + load_careeronestop_jobs(args.careeronestop_file)
+        + load_ats_jobs(args.ats_file)
     )
     jobs = dedupe_jobs(jobs)
-    ranked_jobs = rank_jobs(jobs, home_location, personal_keywords)
+    ranked_jobs = rank_jobs(jobs, home_location, personal_keywords, avoid_keywords)
     save_ranked_jobs(ranked_jobs, args.output)
     preview_ranked_jobs(ranked_jobs, args.preview_count)
     print(f"\nSaved ranked jobs to {args.output}")
